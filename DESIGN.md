@@ -99,7 +99,7 @@ have no such attributes: underline, italic, strikethrough, blink, and wide chara
 ## Not in the first version
 
 Detach and attach (a server and clients), splits (panes within a screen; the design allows it: a Session is just a picture source),
-scrollback browsing, copy mode, mouse, a config file, the wide character and underline attributes.
+copy mode (scrollback browsing is done: Up/Down/PageUp/PageDown/Home/End in command mode), mouse, a config file, the wide character and underline attributes.
 
 ## Testing
 

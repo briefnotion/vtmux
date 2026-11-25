@@ -54,6 +54,12 @@ public:
     bool publish(vtscreen::Picture& pic, bool show_cursor, const Theme& theme);
     void invalidate() { std::lock_guard<std::mutex> lock(mutex_); painter_.invalidate(); }
 
+    // The view into the history. 0 is the live screen. scroll_by moves it back (positive) or forward (negative) by lines and says
+    // where it is now; scroll_reset goes back to live. New output while scrolled back keeps the lines on the screen where they were.
+    size_t scroll_by(long lines, size_t* history = nullptr);
+    void scroll_reset();
+    size_t scroll_back(size_t* history = nullptr);
+
     InputModes modes();
     std::string title();
     int rows();
@@ -86,6 +92,8 @@ private:
     std::mutex mutex_;                           // guards the emulator and the painter
     Emulator emulator_;
     PanePainter painter_;
+    size_t scroll_back_ = 0;                     // lines scrolled back (guarded by the mutex)
+    size_t last_history_ = 0;                    // the history's size when last published
 };
 
 }  // namespace vtmux

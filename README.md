@@ -38,8 +38,9 @@ In normal mode every key goes to the program in the console, untouched (Ctrl-C a
 | `Left`, `Right` | the previous, the next console, with a fade; it stays in command mode so you can keep flipping |
 | `1` to `9` | that console, and back to normal mode |
 | `c`, `n`, `p` | a new console, the next, the previous (as in tmux) |
+| `Up`, `Down`, `PageUp`, `PageDown`, `Home` | look back through the console's history (2000 lines); the bar shows how far back. `End` returns to the live screen |
 | `:` | type a command (Enter runs it, Esc gives up, Backspace edits, Ctrl-U clears) |
-| `Esc`, `Enter` | back to normal mode |
+| `Esc`, `Enter` | back to normal mode (and to the live screen). Typing into the console does the same |
 | `Ctrl-B` | send a real Ctrl-B to the program, and back to normal mode |
 
 ## Commands (after the colon)
@@ -71,7 +72,7 @@ paste, mouse, focus) and takes it out of them again on the way out.
 
 - Underline, italic, strikethrough and blink are not drawn, and wide characters (Chinese, emoji) show as `?`: vtscreen's cells do not
   have those yet (a later step is to give them to vtscreen).
-- No detach and attach (there is no server), no splits, no scrollback browsing or copy mode, no mouse commands, no config file.
+- No detach and attach (there is no server), no splits, no copy mode (the history can be looked at, not selected from), no mouse commands, no config file.
 - Not supported by the emulator: sixel, double height lines, the 132 column mode (the screen clears but does not resize), combining
   marks (they are dropped).
 

@@ -543,7 +543,37 @@ void test_incremental_equals_fresh() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- the history
+
+void test_scrolled_back_view() {
+    Emulator e(3, 10, 50);
+    Picture p = make_pic(3, 10);
+    PanePainter pp;
+    for (int i = 1; i <= 8; i++) e.feed("L" + std::to_string(i) + "\r\n");          // 8 lines, the screen has 3: L7 and L8 and a blank row
+    e.feed("live");
+    CHECK_EQ((int)e.scrollback_size(), 6);                                            // L1 to L6 went off the top; the screen is L7, L8, live
+    pp.paint(e, p, true, Theme());
+    CHECK_EQ((int)at(p, 2, 0).ch, (int)U'l');                                         // the live screen: "live" on the last row
+    CHECK_EQ((int)at(p, 0, 1).ch, (int)U'7');
+
+    pp.paint(e, p, true, Theme(), 2);                                                 // two lines back: L5 L6 L7
+    CHECK_EQ((int)at(p, 0, 1).ch, (int)U'5');
+    CHECK_EQ((int)at(p, 1, 1).ch, (int)U'6');
+    CHECK_EQ((int)at(p, 2, 1).ch, (int)U'7');
+    CHECK(!at(p, 2, 4).inv);                                                          // no cursor drawn when scrolled back
+
+    pp.paint(e, p, true, Theme(), 1000);                                              // more than there is: held to the history (L1 L2 L3)
+    CHECK_EQ((int)at(p, 0, 1).ch, (int)U'1');
+    CHECK_EQ((int)at(p, 2, 1).ch, (int)U'3');
+
+    pp.paint(e, p, true, Theme(), 0);                                                 // back to live: a full repaint
+    CHECK_EQ((int)at(p, 2, 0).ch, (int)U'l');
+    CHECK_EQ((int)at(p, 0, 1).ch, (int)U'7');
+    CHECK_EQ((int)at(p, 1, 1).ch, (int)U'8');
+}
+
 int main() {
+    test_scrolled_back_view();
     test_plain_text();
     test_theme_default_fg();
     test_colours();

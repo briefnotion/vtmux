@@ -64,23 +64,50 @@ vtscreen::PicCell to_pic(const Cell& k, const Theme& theme, bool flip) {
 }
 
 void paint_row(const Emulator& emu, vtscreen::Picture& pic, int row, int cols, bool reverse_screen,
-               bool cursor_here, int cursor_col, const Theme& theme) {
+               bool cursor_here, int cursor_col, const Theme& theme, int emu_row = -1) {
+    if (emu_row < 0) emu_row = row;                  // the screen row drawn on picture row `row`
     for (int c = 0; c < cols; c++) {
         const bool flip = reverse_screen != (cursor_here && c == cursor_col);
-        pic.set(row, c, to_pic(emu.cell(row, c), theme, flip));
+        pic.set(row, c, to_pic(emu.cell(emu_row, c), theme, flip));
+    }
+}
+
+// A row of the view scrolled back: line `line` of the history followed by the screen (a history line may be a different width: it is
+// cut or padded with blanks).
+void paint_history_row(const Emulator& emu, vtscreen::Picture& pic, int row, int cols, size_t line, bool reverse_screen, const Theme& theme) {
+    const size_t history = emu.scrollback_size();
+    if (line >= history) {
+        paint_row(emu, pic, row, cols, reverse_screen, false, 0, theme, (int)(line - history));
+        return;
+    }
+    const std::vector<Cell>& cells = emu.scrollback_line(line);
+    const Cell blank;
+    for (int c = 0; c < cols; c++) {
+        const Cell& k = (size_t)c < cells.size() ? cells[(size_t)c] : blank;
+        pic.set(row, c, to_pic(k, theme, reverse_screen));
     }
 }
 
 }  // namespace
 
-int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, const Theme& theme) {
+int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, const Theme& theme, size_t scroll_back) {
     // The emulator's rows are the picture's rows but the last (the bar's). If the picture is not that shape, paint the part
     // that fits rather than write out of range.
     const int rows = std::max(0, std::min(emu.rows(), pic.rows - 1));
     const int cols = std::max(0, std::min(emu.cols(), pic.cols));
     const bool reverse_screen = emu.reverse_video();
+    scroll_back = std::min(scroll_back, emu.scrollback_size());
 
-    const bool full = all_ || emu.rows() != last_rows_ || emu.cols() != last_cols_ ||
+    if (scroll_back > 0) {                                   // browsing the history: every row, no cursor (a Picture notes only real changes)
+        const size_t top = emu.scrollback_size() - scroll_back;
+        for (int r = 0; r < rows; r++) paint_history_row(emu, pic, r, cols, top + (size_t)r, reverse_screen, theme);
+        emu.clear_dirty();
+        all_ = true;                                         // coming back to the live screen is a full paint
+        last_scroll_back_ = scroll_back;
+        return rows;
+    }
+
+    const bool full = all_ || last_scroll_back_ != 0 || emu.rows() != last_rows_ || emu.cols() != last_cols_ ||
                       pic.serial != last_serial_ || reverse_screen != last_reverse_video_;
 
     // where the cursor is drawn now
@@ -103,6 +130,7 @@ int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, 
 
     emu.clear_dirty();
     all_ = false;
+    last_scroll_back_ = 0;
     last_rows_ = emu.rows();
     last_cols_ = emu.cols();
     last_serial_ = pic.serial;

@@ -156,6 +156,7 @@ void App::say(const std::string& text, double now, double seconds) {
 
 void App::forward(const char* data, size_t size) {
     if (size == 0 || windows_.empty()) return;
+    windows_[(size_t)active_].session->scroll_reset();          // typing brings the live screen back
     windows_[(size_t)active_].session->write_input(data, size);
 }
 
@@ -207,7 +208,13 @@ void App::command_key(const Key& key, double now) {
     switch (key.kind) {
         case KeyKind::Left: switch_to((active_ + count - 1) % count, now); return;          // stays in command mode: flip through them
         case KeyKind::Right: switch_to((active_ + 1) % count, now); return;
-        case KeyKind::Escape: case KeyKind::Enter: set_mode(Mode::Normal); return;
+        case KeyKind::Escape: case KeyKind::Enter: windows_[(size_t)active_].session->scroll_reset(); set_mode(Mode::Normal); return;
+        case KeyKind::Up: windows_[(size_t)active_].session->scroll_by(1); return;                // the history
+        case KeyKind::Down: windows_[(size_t)active_].session->scroll_by(-1); return;
+        case KeyKind::PageUp: windows_[(size_t)active_].session->scroll_by(std::max(1, rows_ - 2)); return;
+        case KeyKind::PageDown: windows_[(size_t)active_].session->scroll_by(-std::max(1, rows_ - 2)); return;
+        case KeyKind::Home: windows_[(size_t)active_].session->scroll_by(1L << 30); return;
+        case KeyKind::End: windows_[(size_t)active_].session->scroll_reset(); return;
         case KeyKind::Char:
             if (key.ch == (char32_t)(unsigned char)options_.prefix) {                       // the prefix again: send it on
                 const char c = options_.prefix;
@@ -354,7 +361,10 @@ void App::draw_bar(vtscreen::Picture& pic, double now) {
         col += (int)utf8_len(cut);
     }
     std::string right;
-    if (mode_ == Mode::Command) right = "COMMAND  \xE2\x86\x90 \xE2\x86\x92 switch   : command   1-9 go   Esc back";
+    size_t history = 0;
+    const size_t back = windows_.empty() ? 0 : windows_[(size_t)active_].session->scroll_back(&history);
+    if (mode_ == Mode::Command && back > 0) right = "SCROLL -" + std::to_string(back) + "/" + std::to_string(history) + "  \xE2\x86\x91\xE2\x86\x93 PgUp PgDn Home End   Esc live";
+    else if (mode_ == Mode::Command) right = "COMMAND  \xE2\x86\x90 \xE2\x86\x92 switch  \xE2\x86\x91 history  : command  1-9 go  Esc back";
     else if (!message_.empty() && now < message_until_) right = message_;
     else right = "vtmux  ^B for commands";
     const int room = width - col - 1;

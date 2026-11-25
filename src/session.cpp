@@ -1,5 +1,7 @@
 #include "session.h"
 
+#include <algorithm>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -184,7 +186,32 @@ void Session::resize(int rows, int cols) {
 
 bool Session::publish(vtscreen::Picture& pic, bool show_cursor, const Theme& theme) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return painter_.paint(emulator_, pic, show_cursor, theme) > 0;
+    const size_t history = emulator_.scrollback_size();
+    if (scroll_back_ > 0 && history > last_history_) scroll_back_ += history - last_history_;       // the lines on the screen stay put
+    last_history_ = history;
+    scroll_back_ = std::min(scroll_back_, history);
+    return painter_.paint(emulator_, pic, show_cursor && scroll_back_ == 0, theme, scroll_back_) > 0;
+}
+
+size_t Session::scroll_by(long lines, size_t* history) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const size_t total = emulator_.scrollback_size();
+    long now = (long)scroll_back_ + lines;
+    now = std::max(0L, std::min(now, (long)total));
+    scroll_back_ = (size_t)now;
+    if (history) *history = total;
+    return scroll_back_;
+}
+
+void Session::scroll_reset() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    scroll_back_ = 0;
+}
+
+size_t Session::scroll_back(size_t* history) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (history) *history = emulator_.scrollback_size();
+    return scroll_back_;
 }
 
 InputModes Session::modes() {

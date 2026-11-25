@@ -71,6 +71,29 @@ std::string bar(App& app) { return row_text(app.frame(g_now), 9); }        // th
 int main() {
     std::string error;
 
+    // ---- the history: arrows and pages in command mode scroll back, Escape or typing comes back live
+    {
+        App app(10, 60, options());
+        CHECK(app.start(error));
+        type(app, "i=1; while [ $i -le 60 ]; do echo \"row$((i+1000))x\"; i=$((i+1)); done; echo DO''NE\n");
+        CHECK(expect_shows(app, "DONE"));
+        CHECK(!shows(app, "row1001x"));                                          // long gone off the top
+        type(app, "\x02");
+        type(app, "\x1b[5~");                                                    // PageUp
+        CHECK(pump(app, [&] { return bar(app).find("SCROLL -") != std::string::npos; }));
+        CHECK(!shows(app, "DONE"));                                              // scrolled away from the live screen
+        type(app, "\x1b[H");                                                     // Home: as far back as it goes
+        CHECK(pump(app, [&] { return shows(app, "row1001x"); }));
+        type(app, "\x1b[F");                                                     // End: live again
+        CHECK(pump(app, [&] { return shows(app, "DONE"); }));
+        CHECK(bar(app).find("SCROLL") == std::string::npos);
+        type(app, "\x1b[A");                                                     // Up: one line back
+        CHECK(pump(app, [&] { return bar(app).find("SCROLL -1/") != std::string::npos; }));
+        type(app, "\x1b");                                                       // Escape: normal mode, and live
+        CHECK(pump(app, [&] { return app.mode() == Mode::Normal && bar(app).find("SCROLL") == std::string::npos; }));
+        CHECK(shows(app, "DONE"));
+    }
+
     // ---- start: one console, normal mode, the bar names it
     {
         App app(10, 60, options());

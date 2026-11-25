@@ -23,7 +23,11 @@ public:
     // row is the control bar's and is never touched). The cursor is drawn as an inverse cell when show_cursor is true and the emulator's
     // cursor is visible. Clears the emulator's dirty flags (so the caller holds the session lock). Returns how many rows were written.
     // A different size of picture from last time is a full paint.
-    int paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, const Theme& theme);
+    //
+    // scroll_back: how many lines the view is scrolled back into the history. 0 is the live screen. Above 0 the picture shows the
+    // history lines and then the screen, `scroll_back` lines up from the live view, without a cursor (a scroll back greater than the
+    // history is held to it).
+    int paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, const Theme& theme, size_t scroll_back = 0);
 
 private:
     bool all_ = true;
@@ -31,6 +35,7 @@ private:
     Cursor last_cursor_;
     bool last_cursor_shown_ = false;
     bool last_reverse_video_ = false;
+    size_t last_scroll_back_ = 0;
     uint64_t last_serial_ = 0;                // the picture painted last (a different one is a full paint)
 };
 
