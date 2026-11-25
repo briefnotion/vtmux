@@ -91,4 +91,4 @@ paste, mouse, focus) and takes it out of them again on the way out.
 
 ## Licence
 
-Not decided yet.
+GNU General Public License, version 3 (see `LICENSE`). The `vtscreen` library it builds on is MIT licensed.
