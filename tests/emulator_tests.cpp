@@ -74,6 +74,23 @@ bool same_screen(const Emulator& a, const Emulator& b) {
 }  // namespace
 
 int main() {
+    // ---- found by the conformance run: history with a top margin at row 1; SGR out of range ignored; VPR stops at the margin
+    {
+        Emulator e(3, 4);
+        e.feed("a\r\nb\r\nc\x1b[1;2r\x1b[2;1H\n\n");          // a region from the first row to the second: two lines scroll off its top
+        CHECK_EQ(e.scrollback_size(), (size_t)2);
+        Emulator d(3, 4);
+        d.feed("a\r\nb\r\nc\x1b[1;1H\x1b[2M");                  // deleted lines are not scrolled off
+        CHECK_EQ(d.scrollback_size(), (size_t)0);
+        Emulator r(3, 4);
+        r.feed("a\r\nb\r\nc\x1b[2;3r\x1b[2;1H\x1b[9e");
+        CHECK_EQ(r.cursor().row, 2);
+        Emulator g(2, 4);
+        g.feed("\x1b[31m\x1b[38;5;300mG\x1b[48;2;300;0;0mH");
+        CHECK(g.cell(0, 0).fg == Color::index(1));              // the red from before stays: the bad setting is ignored
+        CHECK(g.cell(0, 1).bg == Color());
+    }
+
     // ---- the character widths
     CHECK_EQ(char_width(U'a'), 1);
     CHECK_EQ(char_width(0xE9), 1);

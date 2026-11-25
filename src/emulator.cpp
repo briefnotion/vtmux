@@ -123,10 +123,10 @@ void Emulator::erase_rows(int from, int to) {
     for (int r = std::max(from, 0); r < std::min(to, rows_); r++) erase_cells(r, 0, cols_);
 }
 
-void Emulator::scroll_up(int top, int bottom, int n) {
+void Emulator::scroll_up(int top, int bottom, int n, bool keep_history) {
     n = std::min(n, bottom - top + 1);
     if (n <= 0) return;
-    if (!use_alt_ && top == 0 && bottom == rows_ - 1 && scrollback_limit_ > 0) {     // the whole screen scrolls: keep what leaves
+    if (keep_history && !use_alt_ && top == 0 && scrollback_limit_ > 0) {     // lines leave through the top of the main screen: keep them (as tmux and xterm do, with or without a bottom margin)
         for (int r = 0; r < n; r++) {
             scrollback_.emplace_back(main_.begin() + (size_t)r * cols_, main_.begin() + (size_t)(r + 1) * cols_);
             if (scrollback_.size() > scrollback_limit_) scrollback_.pop_front();
@@ -399,11 +399,11 @@ void Emulator::sgr(const Params& p) {
                 }
                 Color c;
                 bool ok = false;
-                auto byte = [](int x) { return x < 0 ? 0 : std::min(x, 255); };
-                if (!v.empty() && v[0] == 5 && v.size() >= 2) { c = Color::index(byte(v[1])); ok = true; }
+                auto in_range = [](int x) { return x >= 0 && x <= 255; };           // out of range: the whole setting is ignored (as xterm and tmux do)
+                if (!v.empty() && v[0] == 5 && v.size() >= 2) { if (in_range(v[1])) { c = Color::index(v[1]); ok = true; } }
                 else if (!v.empty() && v[0] == 2) {
-                    if (v.size() >= 5) { c = Color::rgb(byte(v[2]), byte(v[3]), byte(v[4])); ok = true; }          // with a colour space id
-                    else if (v.size() >= 4) { c = Color::rgb(byte(v[1]), byte(v[2]), byte(v[3])); ok = true; }
+                    if (v.size() >= 5) { if (in_range(v[2]) && in_range(v[3]) && in_range(v[4])) { c = Color::rgb(v[2], v[3], v[4]); ok = true; } }   // with a colour space id
+                    else if (v.size() >= 4) { if (in_range(v[1]) && in_range(v[2]) && in_range(v[3])) { c = Color::rgb(v[1], v[2], v[3]); ok = true; } }
                 }
                 if (ok) { if (code == 38) pen_fg_ = c; else pen_bg_ = c; }
                 i = used;
@@ -486,7 +486,11 @@ void Emulator::clear_screen_home() {
 void Emulator::device_status(const Params& p, char marker) {
     const int what = p.get(0, 0);
     if (marker == '?') {                                         // the DEC ones
-        if (what == 15) reply_ += "\x1b[?13n";                   // no printer
+        if (what == 6) {                                         // DECXCPR: the cursor position, as the DEC private form
+            const int row = cursor_.row - (origin_mode_ ? scroll_top_ : 0);
+            reply_ += "\x1b[?" + std::to_string(row + 1) + ";" + std::to_string(cursor_.col + 1) + "R";
+        }
+        else if (what == 15) reply_ += "\x1b[?13n";                   // no printer
         else if (what == 25) reply_ += "\x1b[?21n";              // user defined keys are locked
         else if (what == 26) reply_ += "\x1b[?27;1n";            // keyboard: North American
         return;
@@ -577,7 +581,7 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
             if (cursor_.row >= scroll_top_ && cursor_.row <= scroll_bottom_) { scroll_down(cursor_.row, scroll_bottom_, n1); carriage_return(); }
             break;
         case 'M':                                                                                                     // DL
-            if (cursor_.row >= scroll_top_ && cursor_.row <= scroll_bottom_) { scroll_up(cursor_.row, scroll_bottom_, n1); carriage_return(); }
+            if (cursor_.row >= scroll_top_ && cursor_.row <= scroll_bottom_) { scroll_up(cursor_.row, scroll_bottom_, n1, false); carriage_return(); }
             break;
         case 'P':                                                                                                     // DCH
             close_gap(cursor_.row, cursor_.col, n1);
@@ -595,7 +599,7 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
             else if (p.get(0, 0) == 1) reply_ += "\x1b[3;1;1;112;112;1;0x";
             break;
         case 'd': move_to(n1 - 1, cursor_.col); break;
-        case 'e': cursor_.row = std::min(cursor_.row + n1, rows_ - 1); wrap_pending_ = false; break;
+        case 'e': cursor_.row = std::min(cursor_.row + n1, cursor_.row <= scroll_bottom_ ? scroll_bottom_ : rows_ - 1); wrap_pending_ = false; break;      // VPR: like CUD
         case 'g':                                                                                                     // TBC
             if (p.get(0, 0) == 0) tab_stops_[(size_t)cursor_.col] = 0;
             else if (p.get(0, 0) == 3) std::fill(tab_stops_.begin(), tab_stops_.end(), (uint8_t)0);

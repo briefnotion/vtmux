@@ -84,6 +84,9 @@ paste, mouse, focus) and takes it out of them again on the way out.
   clock). `ctest --test-dir build` runs the same tests from the CMake build.
 - `tests/e2e/run.sh` runs the real `vtmux` in a pseudo-terminal with real programs inside (`less`, `vi`, `top`, `htop`, Ctrl-C and
   Ctrl-Z, resizing, the mode mirroring, rapid switching, heavy output, idle CPU) and reads the screen back with a terminal emulator.
+- `tests/conformance/run.sh` feeds thousands of generated escape-sequence streams, hand-written screens and real program captures to the
+  emulator (`tools/vtdump.cpp`), tmux and pyte, and compares the screens. `tests/vt100_tests.cpp`, `vt102_tests.cpp` and `vt52_tests.cpp` pin
+  the DEC terminals' behaviour. What it found is in `tests/conformance/FINDINGS.md`.
 - `tools/demo.py` makes the screenshots above; `tools/preview_transition.py` renders the three fades.
 
 ## Licence

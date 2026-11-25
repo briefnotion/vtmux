@@ -126,7 +126,7 @@ private:
     void mark_dirty(int row) { dirty_[(size_t)row] = 1; any_dirty_ = true; }
     void erase_cells(int row, int from, int to);        // from <= col < to
     void erase_rows(int from, int to);                  // from <= row < to
-    void scroll_up(int top, int bottom, int n);
+    void scroll_up(int top, int bottom, int n, bool keep_history = true);   // keep_history false: the lines are deleted (DL), not scrolled off
     void scroll_down(int top, int bottom, int n);
     void fix_wide_at(int row, int col);                 // blank the other half of a wide character that is about to be broken
     void open_gap(int row, int col, int n);             // shift the rest of the row right by n (ICH, and a character in insert mode)
