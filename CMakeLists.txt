@@ -1,0 +1,56 @@
+cmake_minimum_required(VERSION 3.16)
+project(vtmux LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vtscreen/vtscreen.h")
+    message(FATAL_ERROR "vtscreen is a git submodule and is missing; run:\n    git submodule update --init")
+endif()
+
+find_package(Threads REQUIRED)
+
+# Strict: every warning is an error (as in vtweather). -DVTMUX_STRICT=OFF lets a build finish with warnings.
+option(VTMUX_STRICT "Treat every compiler warning as an error" ON)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra)
+    if(VTMUX_STRICT)
+        add_compile_options(-Werror)
+    endif()
+endif()
+
+set(VTMUX_SOURCES src/vtparser.cpp src/emulator.cpp src/width.cpp src/keys.cpp src/render.cpp src/transition.cpp
+    src/session.cpp src/app.cpp)
+
+add_executable(vtmux src/main.cpp ${VTMUX_SOURCES})
+target_include_directories(vtmux PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(vtmux PRIVATE Threads::Threads util)
+
+# Tests: every tests/*_tests.cpp names the sources it needs on a line "// sources: ../src/a.cpp ../src/b.cpp".
+# (tests/run_tests.sh builds the same files with the sanitizers.)
+option(VTMUX_TESTS "Build the test programs" ON)
+if(VTMUX_TESTS)
+    enable_testing()
+    file(GLOB VTMUX_TEST_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*_tests.cpp")
+    foreach(test_file ${VTMUX_TEST_FILES})
+        get_filename_component(test_name ${test_file} NAME_WE)
+        file(STRINGS ${test_file} sources_line REGEX "^// sources:" LIMIT_COUNT 1)
+        set(test_sources ${test_file})
+        if(sources_line)
+            string(REGEX REPLACE "^// sources:[ ]*" "" sources_text "${sources_line}")
+            separate_arguments(sources_list UNIX_COMMAND "${sources_text}")
+            foreach(s ${sources_list})
+                get_filename_component(abs "${CMAKE_CURRENT_SOURCE_DIR}/tests/${s}" ABSOLUTE)
+                list(APPEND test_sources ${abs})
+            endforeach()
+        endif()
+        add_executable(${test_name} ${test_sources})
+        target_include_directories(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+        target_link_libraries(${test_name} PRIVATE Threads::Threads util)
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endforeach()
+endif()
