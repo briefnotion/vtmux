@@ -78,6 +78,7 @@ public:
 private:
     void reader();
     void hang_up();
+    void tell_size();
 
     int rows_, cols_;
     std::vector<std::string> command_;
@@ -93,6 +94,7 @@ private:
     Emulator emulator_;
     PanePainter painter_;
     size_t scroll_back_ = 0;                     // lines scrolled back (guarded by the mutex)
+    int told_rows_ = 0, told_cols_ = 0;          // the size the program was last told (guarded by the mutex)
     size_t last_history_ = 0;                    // the history's size when last published
 };
 

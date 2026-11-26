@@ -42,6 +42,7 @@ char32_t dec_graphics(char32_t cp) {
 Emulator::Emulator(int rows, int cols, size_t scrollback_lines) : scrollback_limit_(scrollback_lines) {
     rows_ = std::max(rows, 1);
     cols_ = std::max(cols, 1);
+    pane_cols_ = cols_;
     main_.assign((size_t)rows_ * cols_, Cell());
     alt_.assign((size_t)rows_ * cols_, Cell());
     dirty_.assign((size_t)rows_, 1);
@@ -435,7 +436,8 @@ void Emulator::set_private_mode(int mode, bool on) {
         case 2:                                                  // DECANM: reset enters VT52 mode (leaving it is ESC <)
             if (!on) { vt52_ = true; vt52_y_pending_ = 0; parser_.set_vt52(true); }
             break;
-        case 3: clear_screen_home(); break;                      // DECCOLM: 80 or 132 columns; we cannot resize the real terminal, but the screen clears
+        case 3: set_columns_mode(on); break;                     // DECCOLM: 132 (set) or 80 (reset) columns
+        case 40: allow_deccolm_ = on; if (!on && cols_ != pane_cols_) resize_to(rows_, pane_cols_); break;
         case 5: reverse_video_ = on; mark_all_dirty(); break;
         case 6: origin_mode_ = on; move_to(0, 0); break;
         case 7: auto_wrap_ = on; if (!on) wrap_pending_ = false; break;
@@ -475,6 +477,14 @@ void Emulator::set_mode(const Params& p, bool private_mode, bool on) {
         else if (m == 4) insert_mode_ = on;
         else if (m == 20) newline_mode_ = on;
     }
+}
+
+// DECCOLM. The real terminal cannot be told to change its width, so the screen is 80 or 132 columns of the pane (the rest of the pane stays
+// blank; a pane narrower than that gets all of it). It only happens if the program allowed it with mode 40, as xterm needs: `reset`, which
+// sends the mode 3 reset, does not narrow anything. Either way the screen clears and the cursor goes home.
+void Emulator::set_columns_mode(bool wide) {
+    if (allow_deccolm_) resize_to(rows_, std::min(wide ? 132 : 80, pane_cols_));
+    clear_screen_home();
 }
 
 void Emulator::clear_screen_home() {
@@ -521,6 +531,8 @@ void Emulator::full_reset() {
     std::fill(alt_.begin(), alt_.end(), Cell());
     auto_wrap_ = true; newline_mode_ = false; bracketed_paste_ = false; focus_reporting_ = false; reverse_video_ = false;
     reverse_wrap_ = false; mouse_tracking_ = 0; mouse_sgr_ = false;
+    allow_deccolm_ = false;
+    if (cols_ != pane_cols_) resize_to(rows_, pane_cols_);        // the full pane again
     cursor_ = Cursor();
     reset_tab_stops();
     mark_all_dirty();
@@ -623,6 +635,11 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
 // ------------------------------------------------------------------------------------------------ resize
 
 void Emulator::resize(int rows, int cols) {
+    pane_cols_ = std::max(cols, 1);                              // the pane's own size: whatever DECCOLM did is over
+    resize_to(rows, cols);
+}
+
+void Emulator::resize_to(int rows, int cols) {
     rows = std::max(rows, 1);
     cols = std::max(cols, 1);
     if (rows == rows_ && cols == cols_) return;

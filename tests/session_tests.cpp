@@ -98,6 +98,18 @@ int main() {
         CHECK(s.with_emulator([](Emulator& e) { return e.rows() == 9 && e.cols() == 33; }));
     }
 
+    // ---- the program switches the screen to 80 columns (DECCOLM, allowed with mode 40): the emulator narrows and the program is told
+    {
+        Session s(6, 100, {"sh", "-c", "trap 'stty size' WINCH; printf '\\033[?40h\\033[?3l'; stty size; while :; do sleep 0.05; done"});
+        CHECK(s.start(error));
+        CHECK(wait_for([&] { return contains(s, "6 80"); }));
+        CHECK(s.with_emulator([](Emulator& e) { return e.cols() == 80; }));
+        CHECK_EQ(s.cols(), 100);                                    // the pane is still 100
+        s.resize(6, 90);                                            // the pane's own size is back in charge
+        CHECK(wait_for([&] { return s.with_emulator([](Emulator& e) { return e.cols() == 90; }); }));
+        CHECK(wait_for([&] { return contains(s, "6 90"); }));
+    }
+
     // ---- closing hangs the program up, and leaves nothing behind
     {
         pid_t pid;

@@ -74,6 +74,41 @@ bool same_screen(const Emulator& a, const Emulator& b) {
 }  // namespace
 
 int main() {
+    // ---- DECCOLM: 80 or 132 columns of the pane, but only when the program allowed it (mode 40, as xterm needs)
+    {
+        Emulator e(5, 100);
+        e.feed("abc\x1b[?3l");                                  // not allowed: it clears and keeps the width (this is what `reset` sends)
+        CHECK_EQ(e.cols(), 100);
+        e.feed("\x1b[?40h\x1b[?3l");
+        CHECK_EQ(e.cols(), 80);
+        CHECK_EQ(e.rows(), 5);
+        e.feed("x");
+        CHECK_EQ((int)e.cell(0, 0).ch, (int)U'x');
+        e.feed("\x1b[1;100H");                                  // the cursor cannot go past the 80th column
+        CHECK_EQ(e.cursor().col, 79);
+        e.feed("\x1b[?3h");                                     // 132 does not fit a pane of 100: it takes all of it
+        CHECK_EQ(e.cols(), 100);
+        e.feed("\x1b[?3l\x1b[?40l");                           // mode 40 off: the pane's width is back
+        CHECK_EQ(e.cols(), 100);
+        e.feed("\x1b[?40h\x1b[?3l\x1b" "c");                     // a full reset too
+        CHECK_EQ(e.cols(), 100);
+        e.feed("\x1b[?3l");                                     // and the permission went with it
+        CHECK_EQ(e.cols(), 100);
+
+        Emulator w(4, 200);
+        w.feed("\x1b[?40h\x1b[?3h");
+        CHECK_EQ(w.cols(), 132);
+        w.feed("\x1b[?3l");
+        CHECK_EQ(w.cols(), 80);
+        w.resize(4, 150);                                       // the pane is resized: that is the width now, whatever DECCOLM said
+        CHECK_EQ(w.cols(), 150);
+        w.feed("\x1b[?3l");
+        CHECK_EQ(w.cols(), 80);                                 // (the permission stays until it is taken away)
+        w.resize(4, 60);
+        w.feed("\x1b[?3l");
+        CHECK_EQ(w.cols(), 60);                                 // a pane narrower than 80 keeps its width
+    }
+
     // ---- found by the conformance run: history with a top margin at row 1; SGR out of range ignored; VPR stops at the margin
     {
         Emulator e(3, 4);

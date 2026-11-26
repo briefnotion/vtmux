@@ -57,7 +57,7 @@ void close_inherited_descriptors() {
 }  // namespace
 
 Session::Session(int rows, int cols, std::vector<std::string> command, size_t scrollback_lines)
-    : rows_(rows), cols_(cols), command_(std::move(command)), emulator_(rows, cols, scrollback_lines) {}
+    : rows_(rows), cols_(cols), command_(std::move(command)), emulator_(rows, cols, scrollback_lines) { told_rows_ = rows; told_cols_ = cols; }
 
 Session::~Session() {
     hang_up();
@@ -125,6 +125,7 @@ void Session::reader() {
                 std::lock_guard<std::mutex> lock(mutex_);
                 emulator_.feed(buf, (size_t)got);
                 reply = emulator_.take_reply();
+                if (emulator_.cols() != told_cols_ || emulator_.rows() != told_rows_) tell_size();      // the program switched to 80 or 132 columns
             }
             if (!reply.empty()) write_fully(master_, reply.data(), reply.size());
         }
@@ -170,17 +171,22 @@ void Session::write_input(const char* data, size_t size) {
 }
 
 void Session::resize(int rows, int cols) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        rows_ = rows; cols_ = cols;
-        emulator_.resize(rows, cols);
-        painter_.invalidate();
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    rows_ = rows; cols_ = cols;
+    emulator_.resize(rows, cols);
+    painter_.invalidate();
+    tell_size();
+}
+
+// Tell the program the size of the screen (it gets SIGWINCH). With the mutex held (so that this and the reader never tell it out of order).
+void Session::tell_size() {
+    told_rows_ = emulator_.rows();
+    told_cols_ = emulator_.cols();
     if (master_ >= 0) {
         winsize ws{};
-        ws.ws_row = (unsigned short)rows;
-        ws.ws_col = (unsigned short)cols;
-        ::ioctl(master_, TIOCSWINSZ, &ws);                       // the program gets SIGWINCH
+        ws.ws_row = (unsigned short)told_rows_;
+        ws.ws_col = (unsigned short)told_cols_;
+        ::ioctl(master_, TIOCSWINSZ, &ws);
     }
 }
 

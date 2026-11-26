@@ -78,6 +78,7 @@ void paint_row(const Emulator& emu, vtscreen::Picture& pic, int row, int cols, b
         const bool flip = reverse_screen != (cursor_here && c == cursor_col);
         pic.set(row, c, to_pic(emu.cell(emu_row, c), theme, flip));
     }
+    for (int c = cols; c < pic.cols; c++) pic.set(row, c, vtscreen::PicCell());      // a screen narrower than the pane (DECCOLM): the rest is blank
 }
 
 // A row of the view scrolled back: line `line` of the history followed by the screen (a history line may be a different width: it is
@@ -94,6 +95,7 @@ void paint_history_row(const Emulator& emu, vtscreen::Picture& pic, int row, int
         const Cell& k = (size_t)c < cells.size() ? cells[(size_t)c] : blank;
         pic.set(row, c, to_pic(k, theme, reverse_screen));
     }
+    for (int c = cols; c < pic.cols; c++) pic.set(row, c, vtscreen::PicCell());
 }
 
 }  // namespace

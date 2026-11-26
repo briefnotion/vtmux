@@ -609,7 +609,37 @@ void test_scrolled_back_view() {
     CHECK_EQ((int)at(p, 1, 1).ch, (int)U'8');
 }
 
+void test_narrow_screen_in_a_wide_pane() {
+    // the screen is narrower than the pane (DECCOLM): what is in the rest of the pane is blanked, and again when the view is scrolled back
+    Emulator e(3, 20, 50);
+    Picture p = make_pic(3, 20);
+    PanePainter pp;
+    e.feed("0123456789ABCDEFGHIJ");
+    pp.paint(e, p, false, Theme());
+    CHECK_EQ((int)at(p, 0, 19).ch, (int)U'J');
+    e.feed("\x1b[?40h\x1b[?3l");                          // 80 does not fit 20: nothing changes
+    e.resize(3, 20);
+    Emulator w(3, 100, 50);
+    Picture q = make_pic(3, 100);
+    PanePainter qp;
+    w.feed("\x1b[1;90Hxyz");
+    qp.paint(w, q, false, Theme());
+    CHECK_EQ((int)at(q, 0, 89).ch, (int)U'x');
+    w.feed("\x1b[?40h\x1b[?3l\x1b[1;1Hhello");           // 80 columns in a pane of 100
+    qp.paint(w, q, false, Theme());
+    CHECK_EQ(w.cols(), 80);
+    CHECK_EQ((int)at(q, 0, 0).ch, (int)U'h');
+    for (int c = 80; c < 100; c++) CHECK(at(q, 0, c) == PicCell());           // the old content out in the margin is gone
+    CHECK_EQ((int)at(q, 0, 89).ch, (int)U' ');
+    for (int i = 0; i < 70; i++) w.feed("line\r\n");
+    qp.paint(w, q, false, Theme(), 5);                                         // scrolled back: the margin is still blank
+    for (int c = 80; c < 100; c++) CHECK(at(q, 0, c) == PicCell());
+    qp.paint(w, q, true, Theme());
+    for (int c = 80; c < 100; c++) CHECK(at(q, 1, c) == PicCell());
+}
+
 int main() {
+    test_narrow_screen_in_a_wide_pane();
     test_scrolled_back_view();
     test_plain_text();
     test_theme_default_fg();

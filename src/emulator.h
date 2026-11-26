@@ -153,13 +153,17 @@ private:
     void set_private_mode(int mode, bool on);
     void use_alt(bool on, bool clear);
     void device_status(const Params& p, char marker);
-    void clear_screen_home();                  // DECCOLM: the screen is cleared and the cursor goes home (the size cannot change)
+    void clear_screen_home();                  // the screen is cleared and the cursor goes home
+    void resize_to(int rows, int cols);        // the grid is this size (what resize does, without changing the pane's width)
+    void set_columns_mode(bool wide);          // DECCOLM: 132 (wide) or 80 columns, within the pane; the screen clears
     void soft_reset();
     void full_reset();
     void reset_tab_stops();
     char32_t translate(char32_t cp) const;
 
     int rows_ = 0, cols_ = 0;
+    int pane_cols_ = 0;                        // the width of the pane (cols_ is less than that while DECCOLM has the screen at 80 or 132)
+    bool allow_deccolm_ = false;               // mode 40: the program allows the 80/132 column switch (as xterm needs); `reset` does not set it
     std::vector<Cell> main_, alt_;
     bool use_alt_ = false;
     std::vector<uint8_t> dirty_;

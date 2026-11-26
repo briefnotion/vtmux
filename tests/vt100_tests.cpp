@@ -271,8 +271,8 @@ int main() {
 
     // ================================================================================================ menu 1: screen features
 
-    {   // DECCOLM (?3) is not supported (a multiplexer cannot resize the real terminal): it clears the screen, homes the cursor
-        // and keeps its size; that is what xterm does with the 80/132 switch disabled apart from the resize itself
+    {   // DECCOLM (?3) without the program having allowed it (mode 40): it clears the screen, homes the cursor and keeps its size (see
+        // emulator_tests for the switch itself, which narrows the screen within the pane)
         Emulator e(5, 20);
         e.feed("abc\r\ndef\x1b[3;2H\x1b[?3h");
         CHECK_EQ(e.cols(), 20);

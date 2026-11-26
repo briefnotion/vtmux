@@ -91,8 +91,8 @@ paste, mouse, focus) and takes it out of them again on the way out.
   columns. How they look, or whether they show at all (blink and italic often do not), is up to the terminal program. Combining marks are
   dropped, and a letter the terminal draws at a different width from the emulator's table can look odd.
 - No detach and attach (there is no server), no splits, no copy mode (the history can be looked at, not selected from), no mouse commands, no config file.
-- Not supported by the emulator: sixel, double height lines, the 132 column mode (the screen clears but does not resize), combining
-  marks (they are dropped).
+- Not supported by the emulator: sixel, double width and double height lines (`ESC # 3` to `6`; they are ignored), combining marks (they
+  are dropped). The 80/132 column switch (DECCOLM) works inside the pane: see below.
 
 ## Tests
 
@@ -105,9 +105,12 @@ paste, mouse, focus) and takes it out of them again on the way out.
 - `tests/conformance/run.sh` feeds thousands of generated escape-sequence streams, hand-written screens and real program captures to the
   emulator (`tools/vtdump.cpp`), tmux and pyte, and compares the screens. `tests/vt100_tests.cpp`, `vt102_tests.cpp` and `vt52_tests.cpp` pin
   the DEC terminals' behaviour. What it found is in `tests/conformance/FINDINGS.md`.
-- To try the real `vttest` program (`sudo apt install vttest`) run it inside vtmux in a window of 80 columns (24 rows, plus the bar's). It
-  draws for an 80 or 132 column screen: in a wider window the borders of its first screen come out broken, in tmux too. vtmux does not do
-  the 132 column mode (the screen clears but keeps its width), as most terminal programs do not.
+- To try the real `vttest` program (`sudo apt install vttest`) run it inside vtmux. vttest switches the screen to 80 (or 132) columns with
+  DECCOLM after allowing it with mode 40, as xterm needs, and vtmux does that inside the pane: the screen becomes 80 columns wide at the left
+  (132 if the pane is that wide; a narrower pane keeps all of its width), the rest of the pane stays blank, the program is told the new size
+  (SIGWINCH), and the screen clears. A full reset (`reset`, `ESC c`), mode 40 turned off, or resizing the window brings back the whole pane.
+  Without mode 40 the switch only clears the screen, so the `reset` command does not narrow anything. vttest's double width lines are not
+  drawn double (see above).
 - `tools/demo.py` makes the screenshots above; `tools/preview_transition.py` renders the three fades.
 
 ## Licence
