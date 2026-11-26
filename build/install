@@ -1,0 +1,61 @@
+#!/bin/sh
+# Install vtmux so it can be run by name from any prompt. Run it from this directory:   ./install
+#   ./install            builds it (with ./m), then copies it to ~/.local/bin (or /usr/local/bin if you are root)
+#   ./install --system   the same, but into /usr/local/bin for everyone (asks for sudo)
+#   ./install DIR        the same, into DIR
+#   ./install --remove   take it away again (from the same place the options above would choose)
+set -e
+cd "$(dirname "$0")"
+
+mode=user
+dir=
+remove=no
+for arg in "$@"; do
+    case "$arg" in
+        --system) mode=system ;;
+        --remove|--uninstall) remove=yes ;;
+        -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "install: unknown option $arg (see ./install --help)" >&2; exit 2 ;;
+        *) dir="$arg" ;;
+    esac
+done
+
+# where it goes
+if [ -z "$dir" ]; then
+    if [ "$mode" = system ] || [ "$(id -u)" = 0 ]; then dir=/usr/local/bin; else dir="${HOME:?install: HOME is not set}/.local/bin"; fi
+fi
+
+# a command that writes in dir: plain if we can, sudo if not (only for the system place, or a place that needs it)
+as_needed() {
+    probe="$dir"
+    while [ ! -d "$probe" ]; do probe=$(dirname "$probe"); done        # the nearest folder that exists decides if we may write
+    if [ -w "$probe" ]; then "$@"; elif command -v sudo >/dev/null 2>&1; then echo "install: $dir needs sudo"; sudo "$@"; else echo "install: cannot write to $dir (and there is no sudo)" >&2; exit 1; fi
+}
+
+if [ "$remove" = yes ]; then
+    if [ -e "$dir/vtmux" ]; then as_needed rm -f "$dir/vtmux"; echo "removed $dir/vtmux"; else echo "nothing to remove: $dir/vtmux does not exist"; fi
+    exit 0
+fi
+
+# build it
+./m
+[ -x ./vtmux ] || { echo "install: the build did not make ./vtmux" >&2; exit 1; }
+
+# copy it (to a temporary name first, then renamed over: a running vtmux is not disturbed)
+as_needed mkdir -p "$dir"
+as_needed cp ./vtmux "$dir/.vtmux.new"
+as_needed chmod 755 "$dir/.vtmux.new"
+as_needed mv -f "$dir/.vtmux.new" "$dir/vtmux"
+echo "installed: $dir/vtmux"
+
+# can it be found by name?
+case ":$PATH:" in
+    *":$dir:"*) echo "run it with:  vtmux" ;;
+    *)
+        echo
+        echo "note: $dir is not in your PATH, so typing vtmux will not find it yet."
+        echo "Add it (then open a new terminal):"
+        echo "    echo 'export PATH=\"$dir:\$PATH\"' >> ~/.profile"
+        echo "Until then:  $dir/vtmux"
+        ;;
+esac

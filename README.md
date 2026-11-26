@@ -25,7 +25,13 @@ Linux, `g++` with C++17, `cmake` 3.16 or later, `git`:
 
 `./m` (in the `build` directory) builds vtmux, or rebuilds it after a change. It also fetches the `vtscreen` submodule if the clone was made
 without it, and tells you if `cmake` or a compiler is missing. `./m test` builds the tests too and runs them, and `./m clean` removes what
-was built. The same thing by hand: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` skips building the tests.
+was built.
+
+`./install` (also in `build`) runs `./m` and then copies `vtmux` to `~/.local/bin`, so you can type `vtmux` at any prompt (or to `/usr/local/bin`
+if you run it as root). `./install --system` puts it in `/usr/local/bin` for everyone (it asks for sudo), `./install DIR` puts it in `DIR`, and
+`./install --remove` takes it away again. If the folder is not in your `PATH` it says so and shows the line to add.
+
+The same thing as `./m` by hand: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` skips building the tests.
 
     vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
 
