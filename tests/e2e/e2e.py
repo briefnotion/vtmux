@@ -26,7 +26,9 @@ class Run:
             os.environ['PS1'] = 'T$ '
             os.environ['HISTFILE'] = '/dev/null'
             if env: os.environ.update(env)
-            os.execv(BIN, ['vtmux'] + list(args))
+            args = list(args)
+            if '--transition-ms' not in args and '--fade-ms' not in args: args = ['--transition-ms', '150'] + args    # (quick: the tests wait 0.6 s)
+            os.execv(BIN, ['vtmux'] + args)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.ByteStream(self.screen)

@@ -73,6 +73,7 @@ AppOptions options() {
 }
 
 std::string bar(App& app) { return row_text(app.frame(g_now), 9); }        // the last row of a 10 row screen
+std::string bar(App& app, int row) { return row_text(app.frame(g_now), row); }        // the last row of a 10 row screen
 
 }  // namespace
 
@@ -82,6 +83,7 @@ int main() {
     // ---- the slide (the default): the consoles are side by side in a row and the view slides along it
     {
         CHECK(AppOptions().style == TransitionStyle::Slide);
+        CHECK_EQ(AppOptions().fade_ms, 1000);                                          // one step of a slide takes a second
         AppOptions o = options();
         o.style = TransitionStyle::Slide;
         o.first_command = {"sh", "-c", "printf '%060d' 0 | tr 0 A; sleep 30"};           // a first row of A, of B, of C ... one for each console
@@ -164,8 +166,10 @@ int main() {
     {   // a new console goes in next to this one, drops in from the top while this one slides off; no cursor until it has landed
         AppOptions o = options();
         o.style = TransitionStyle::Slide;
+        o.first_command = {"sh", "-c", "printf '%060d' 0 | tr 0 A; sleep 30"};
         App app(10, 60, o);
         CHECK(app.start(error));
+        CHECK(expect_shows(app, std::string(60, 'A')));
         app.run_command("new b", g_now);
         CHECK(pump(app, [&] { return !app.transitioning(); }));
         app.run_command("new c", g_now);
@@ -181,9 +185,17 @@ int main() {
         CHECK_EQ(app.window_name(1), std::string("inserted"));
         CHECK_EQ(app.window_name(0), std::string("first"));
         CHECK(app.transitioning());
-        (void)app.frame(t0 + 0.05);                                                // in the middle of it: it draws without trouble
-        (void)app.frame(t0 + 0.15);
+        // two steps (300 ms: 150 and 150): the old console slides off to the left, leaving the void; then the new one drops in
+        const vtscreen::Picture& s1 = app.frame(t0 + 0.07);
+        CHECK(s1.at(0, 59).alt_lum == 1 && s1.at(0, 59).alt_r == 16);                // the void on the right
+        CHECK(row_text(s1, 0).find('A') != std::string::npos);                        // the old console, shifted left, is still there
+        const vtscreen::Picture& gap = app.frame(t0 + 0.15);
+        for (int r = 0; r < 9; r++)
+            for (int c = 0; c < 60; c++) CHECK(gap.at(r, c).alt_lum == 1 && gap.at(r, c).alt_r == 16 && gap.at(r, c).ch == U' ');   // nothing but the void
+        const vtscreen::Picture& s2 = app.frame(t0 + 0.24);
+        CHECK(s2.at(8, 59).alt_r == 16 || s2.at(8, 0).alt_r == 16);                    // the new one has not all dropped in: void below it
         CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(app.frame(g_now).at(0, 0).alt_lum == 0 || app.frame(g_now).at(0, 0).alt_r != 16);       // the void is gone when it has landed
     }
 
     {   // closing: the console drops off the bottom, the one to its left slides in; closing the first brings the next in from the right
@@ -200,18 +212,23 @@ int main() {
         app.run_command("close", t0);                                              // B closes: A takes its place, from the left
         CHECK_EQ(app.window_count(), 1);
         CHECK(app.transitioning());
-        const std::string early = body_text(app.frame(t0 + 0.02));
-        CHECK(early.find('B') != std::string::npos);                               // B is still going (on top, dropping)
-        // B has dropped part of the way: the top rows show A (coming in) and the bottom rows B
-        bool a_above_b = false;
-        for (int k = 3; k <= 12; k++) {
+        // two steps (here 300 ms: 150 and 150): first B drops away and nothing else shows, only the void; then A slides in
+        const vtscreen::Picture& step1 = app.frame(t0 + 0.07);
+        const std::string first = body_text(step1);
+        CHECK(first.find('B') != std::string::npos);                               // B is still going, dropping
+        CHECK(first.find('A') == std::string::npos);                               // and A is not there yet
+        CHECK(step1.at(0, 0).alt_lum == 1 && step1.at(0, 0).alt_r == 16 && step1.at(0, 0).alt_g == 18 && step1.at(0, 0).alt_b == 30);   // the void, where B was
+        const std::string gap = body_text(app.frame(t0 + 0.15));                   // B is all the way down and A has not begun
+        CHECK(gap.find('B') == std::string::npos && gap.find('A') == std::string::npos);
+        bool a_slides_in = false, void_beside_a = false;
+        for (int k = 16; k <= 29; k++) {
             const vtscreen::Picture& pic = app.frame(t0 + k * 0.01);
-            for (int r = 0; r < 9; r++) {
-                const std::string row = row_text(pic, r);
-                if (row.find('A') != std::string::npos && row.find('B') == std::string::npos) { a_above_b = true; break; }
-            }
+            const std::string row = row_text(pic, 0);
+            if (row.find('A') != std::string::npos && row.find('B') == std::string::npos) a_slides_in = true;
+            if (row.find('A') != std::string::npos && pic.at(0, 59).alt_r == 16) void_beside_a = true;           // not all of it yet: the void is on its far side
         }
-        CHECK(a_above_b);
+        CHECK(a_slides_in);
+        CHECK(void_beside_a);
         CHECK(pump(app, [&] { return !app.transitioning(); }));
         CHECK(expect_shows(app, std::string(60, 'A')));
         CHECK(body_text(app.frame(g_now)).find('B') == std::string::npos);
@@ -226,7 +243,104 @@ int main() {
         app.run_command("set fps on", 1.7);
         for (int k = 0; k < 100; k++) app.frame(2.0 + k * 0.01);                    // 100 frames a second
         CHECK(row_text(app.frame(3.01), 9).find("fps") != std::string::npos);
-        CHECK(app.fps() > 80 && app.fps() < 120);
+        CHECK(app.fps() > 98 && app.fps() < 102);                                   // 100 (it used to read a little high: one frame too many a window)
+        for (int k = 0; k < 100; k++) app.frame(5.0 + k / 60.0);                    // and 60
+        CHECK(app.fps() > 59 && app.fps() < 61);
+    }
+
+    // ---- the help card: over the middle of the console, which goes on running; Enter, Space, Esc or q closes it; arrows scroll it
+    {
+        AppOptions o = options();
+        o.first_command = {"sh", "-c", "sleep 0.4; echo UPDATED_UNDER_THE_CARD; sleep 30"};
+        App app(30, 100, o);
+        CHECK(app.start(error));
+        type(app, "\x02:help\r");
+        CHECK(app.mode() == Mode::Help);
+        CHECK(app.help_scroll() == 0);
+        const vtscreen::Picture& pic = app.frame(g_now);
+        const std::string all = screen_text(pic);
+        CHECK(all.find("vtmux help") != std::string::npos);
+        CHECK(all.find("Command mode") != std::string::npos);
+        CHECK(all.find("Enter or Space to close") != std::string::npos);
+        CHECK(row_text(pic, 29).find("HELP") != std::string::npos);                       // the bar says so too
+        // two thirds of the screen, in the middle: body 29 rows -> 19 rows from row 5; 100 columns -> 66 from column 17
+        CHECK(pic.at(5, 17).ch == U'\u250C' && pic.at(5, 82).ch == U'\u2510');
+        CHECK(pic.at(23, 17).ch == U'\u2514' && pic.at(23, 82).ch == U'\u2518');
+        CHECK(pic.at(4, 17).ch != U'\u250C' && pic.at(24, 17).ch != U'\u2514');
+        // the console goes on underneath: what it prints after the card opened shows round the card
+        CHECK(pump(app, [&] { return row_text(app.frame(g_now), 0).find("UPDATED_UNDER_THE_CARD") != std::string::npos; }));
+        // the keys do not go to the console
+        type(app, "x");
+        CHECK(app.mode() == Mode::Help);
+        for (const char* closer : {"\r", " ", "q", "\x1b"}) {
+            if (app.mode() != Mode::Help) { type(app, "\x02:help\r"); }
+            CHECK(app.mode() == Mode::Help);
+            type(app, closer);
+            app.tick(g_now + 0.5);                                                          // (a lone Escape settles on a tick)
+            CHECK(app.mode() == Mode::Normal);
+            CHECK(screen_text(app.frame(g_now)).find("vtmux help") == std::string::npos);
+        }
+        CHECK(screen_text(app.frame(g_now)).find("xxx") == std::string::npos);
+        CHECK(pump(app, [&] { return bar(app, 29).find("^B for commands") != std::string::npos; }));
+    }
+    {   // a small screen: the card is the whole body and scrolls
+        App app(10, 60, options());
+        CHECK(app.start(error));
+        type(app, "\x02:help\r");
+        CHECK(screen_text(app.frame(g_now)).find("scroll") != std::string::npos);
+        CHECK(screen_text(app.frame(g_now)).find("Close everything and leave") == std::string::npos);      // the end is not in view yet
+        type(app, "\x1b[B");
+        CHECK_EQ(app.help_scroll(), 1);
+        type(app, "\x1b[A");
+        CHECK_EQ(app.help_scroll(), 0);
+        type(app, "\x1b[A");
+        CHECK_EQ(app.help_scroll(), 0);                                                   // not above the top
+        for (int k = 0; k < 100; k++) type(app, "\x1b[B");
+        const int last = app.help_scroll();
+        CHECK(last > 5);
+        CHECK(screen_text(app.frame(g_now)).find("Close everything and leave") != std::string::npos);
+        type(app, "\x1b[A");
+        CHECK_EQ(app.help_scroll(), last - 1);                                            // not beyond the end: one Up moves it at once
+        type(app, "\x1b[F");
+        CHECK_EQ(app.help_scroll(), last);
+        type(app, "\x1b[H");
+        CHECK_EQ(app.help_scroll(), 0);
+        type(app, "\x1b[6~");                                                            // PageDown
+        CHECK(app.help_scroll() > 1);
+        type(app, "\x1b[5~");
+        CHECK_EQ(app.help_scroll(), 0);
+        type(app, " ");
+        CHECK(app.mode() == Mode::Normal);
+        app.run_command("help", g_now);                                                   // it opens at the top again
+        CHECK_EQ(app.help_scroll(), 0);
+    }
+    {   // a narrow screen lays the help out under each key; a very small one draws no card and does not fail; wide ones are held to 90
+        App narrow(20, 40, options());
+        CHECK(narrow.start(error));
+        narrow.run_command("help", g_now);
+        for (int k = 0; k < 40; k++) (void)narrow.frame(g_now);
+        CHECK(screen_text(narrow.frame(g_now)).find("vtmux help") != std::string::npos);
+        App tiny(3, 10, options());
+        CHECK(tiny.start(error));
+        tiny.run_command("help", g_now);
+        CHECK(tiny.mode() == Mode::Help);
+        (void)tiny.frame(g_now);
+        type(tiny, "\x1b[B\x1b[6~\x1b[F");
+        type(tiny, "q");
+        CHECK(tiny.mode() == Mode::Normal);
+        App wide(30, 200, options());
+        CHECK(wide.start(error));
+        wide.run_command("help", g_now);
+        const vtscreen::Picture& pic = wide.frame(g_now);
+        CHECK(pic.at(5, 55).ch == U'\u250C' && pic.at(5, 144).ch == U'\u2510');          // 90 wide, in the middle
+    }
+    {   // without colour the card is still drawn
+        AppOptions o = options();
+        o.theme.color = false;
+        App app(30, 100, o);
+        CHECK(app.start(error));
+        app.run_command("help", g_now);
+        CHECK(screen_text(app.frame(g_now)).find("vtmux help") != std::string::npos);
     }
 
     // ---- the history: arrows and pages in command mode scroll back, Escape or typing comes back live
@@ -406,13 +520,21 @@ int main() {
         CHECK(app.run_command("set transition slide", g_now) == "transition: slide");
         CHECK(app.run_command("set transition nonsense", g_now).find("transition:") == 0);
         CHECK(app.run_command("set transition-ms 9999", g_now).find("0 to 5000") != std::string::npos);
+        CHECK(app.run_command("set void-color ff8000", g_now) == "void-color: #ff8000");
+        CHECK(app.run_command("set void-color #102030", g_now) == "void-color: #102030");
+        CHECK(app.run_command("set void-color off", g_now) == "void-color: off");
+        CHECK(app.run_command("set void-color pink", g_now).find("void-color:") == 0);
+        CHECK(app.run_command("set void-color 12345", g_now).find("RRGGBB") != std::string::npos);
         CHECK(app.run_command("set fps on", g_now) == "fps: on");
         CHECK(app.show_fps());
         CHECK(app.run_command("set fps off", g_now) == "fps: off");
         CHECK(!app.show_fps());
         CHECK(app.run_command("set fps maybe", g_now).find("fps:") == 0);
         CHECK(app.run_command("set transition-ms 250", g_now) == "transition-ms: 250");
-        CHECK(app.run_command("help", g_now).find("new") == 0);
+        CHECK(app.run_command("help", g_now).empty());                                      // the card opens
+        CHECK(app.mode() == Mode::Help);
+        type(app, "\r");
+        CHECK(app.mode() == Mode::Normal);
         CHECK(app.run_command("", g_now).empty());
         CHECK(app.run_command("   ", g_now).empty());
         CHECK(app.run_command("new \"two words\"", g_now).empty());                  // quotes keep a name together

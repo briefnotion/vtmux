@@ -20,13 +20,16 @@ enum class Mode {
     Normal,           // the keys go to the console
     Command,          // after the prefix key: arrows switch consoles, : starts a command, Esc goes back
     CommandLine,      // typing a command after the colon
+    Help,             // the help card is over the console; arrows scroll it, Enter or Space closes it
 };
 
 struct AppOptions {
     std::vector<std::string> first_command;      // what the first console runs (empty: the shell)
     TransitionStyle style = TransitionStyle::Slide;
-    int fade_ms = 250;                           // what one step of a transition takes (the fade, or one console's slide)
+    int fade_ms = 1000;                          // what one step of a transition takes (the fade, or one console's slide)
     Theme theme;
+    int void_color[3] = {16, 18, 30};            // the empty space while a console is opening or closing
+    bool void_on = true;
     char prefix = 0x02;                          // Ctrl-B
 };
 
@@ -55,6 +58,7 @@ public:
     std::string window_name(int index) const;
     bool transitioning() const { return transition_active_; }
     bool show_fps() const { return show_fps_; }
+    int help_scroll() const { return help_scroll_; }              // the first line of the help card shown
     double fps() const { return fps_; }                           // frames a second, measured
     const std::string& command_line() const { return line_; }
     const std::string& message() const { return message_; }
@@ -80,6 +84,11 @@ private:
     void settle_transition(double now);
     void command_key(const Key& key, double now);
     void line_key(const Key& key, double now);
+    void help_key(const Key& key, double now);
+    void dispatch_key(const Key& key, double now);               // to whatever mode it is
+    const vtscreen::Picture& frame_base(double now);             // what is shown without the help card
+    void draw_help(const vtscreen::Picture& base, vtscreen::Picture& out);
+    int help_max_scroll() const;
     void say(const std::string& text, double now, double seconds = 3.0);
     void draw_bar(vtscreen::Picture& pic, double now);
     void forward(const char* data, size_t size);
@@ -88,6 +97,7 @@ private:
     Window* find(int id);
     double strip_position(double now) const;
     void cancel_transition();
+    vtscreen::PicCell void_cell_() const;
 
     int rows_, cols_;
     AppOptions options_;
@@ -106,8 +116,8 @@ private:
     //   Blend: a fade (crossfade, dissolve, dip) from the console `from_id_` (or from a copy of its picture) to the active one
     //   Strip: the consoles are side by side in a row, in order, and the view slides along it from `strip_from_` (a position in consoles,
     //          not a whole number if a slide was started again part of the way) to the active one
-    //   Open:  a new console drops in from the top, and the one it came from (`from_id_`) slides off to the left
-    //   Close: the console that closed (its copy) drops off the bottom, and the one that takes its place slides in from `close_from_right_`'s side
+    //   Open:  two steps: the console it came from (`from_id_`) slides off to the left, then the new one drops in from the top
+    //   Close: two steps: the console that closed (its copy) drops off the bottom, then the one that takes its place slides in from `close_from_right_`'s side
     enum class Kind { Blend, Strip, Open, Close };
     Kind kind_ = Kind::Blend;
     double strip_from_ = 0;
@@ -120,6 +130,8 @@ private:
     double transition_start_ = 0;
     vtscreen::Picture mixed_;
 
+    int help_scroll_ = 0;
+    vtscreen::Picture card_pic_;                 // the screen with the help card over it
     bool show_fps_ = false;                      // the frame rate on the bar (set fps on)
     double fps_ = 0;
     int fps_frames_ = 0;

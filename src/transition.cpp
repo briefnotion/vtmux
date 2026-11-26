@@ -123,11 +123,11 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
         out.cell[(size_t)(orows - 1) * ocols + c] = b.cell[(size_t)(b.rows - 1) * b.cols + c];
 }
 
-void compose(const std::vector<Layer>& layers, const Picture& bar, Picture& out) {
+void compose(const std::vector<Layer>& layers, const Picture& bar, Picture& out, const PicCell& fill) {
     const int orows = std::max(0, bar.rows), ocols = std::max(0, bar.cols);
     out.retained = false;
     out.rows = orows; out.cols = ocols;
-    out.cell.assign((size_t)orows * ocols, PicCell());
+    out.cell.assign((size_t)orows * ocols, fill);
     out.touch_all();
     if (orows == 0 || ocols == 0) return;
     const int body = orows - 1;
@@ -152,6 +152,12 @@ double ease_out(double t) {
     if (t >= 1) return 1.0;
     const double u = 1.0 - t;
     return 1.0 - u * u * u;
+}
+
+double ease_in(double t) {
+    if (!(t > 0)) return 0.0;
+    if (t >= 1) return 1.0;
+    return t * t * t;
 }
 
 double slide_ms(double steps, double base_ms) {

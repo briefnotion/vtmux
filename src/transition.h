@@ -32,10 +32,14 @@ struct Layer {
 
 // out becomes the layers drawn in order (a later one over an earlier one), cut to the body of `bar`; what no layer covers is blank. The last
 // row (the bar's) is taken from `bar`, which also gives the size. out is assigned (size and cells) and is not retained.
-void compose(const std::vector<Layer>& layers, const vtscreen::Picture& bar, vtscreen::Picture& out);
+// `fill` is what the body is made of before the layers are drawn (the void between screens that slid apart); a default cell is blank.
+void compose(const std::vector<Layer>& layers, const vtscreen::Picture& bar, vtscreen::Picture& out,
+             const vtscreen::PicCell& fill = vtscreen::PicCell());
 
 // 0 to 1 in, 0 to 1 out: fast at first and slowing to a stop (cubic). Outside 0..1 is held to the ends.
 double ease_out(double t);
+// The other way: slow at first and speeding up (cubic), for a screen leaving.
+double ease_in(double t);
 
 // How long a slide of `steps` consoles takes, given what one step takes: one step takes base_ms, a longer one a little longer (up to twice
 // as long), a shorter one (a slide started again part of the way) shorter, but not under 0.3 of a step.

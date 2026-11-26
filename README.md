@@ -47,8 +47,7 @@ In normal mode every key goes to the program in the console, untouched (Ctrl-C a
 
 The consoles sit side by side in a row, in the order on the bar. Switching slides the view along the row, so both screens show part of the way
 and a jump over several consoles shows the ones between going past. A key pressed while a slide is moving starts the next one from where the
-view is now. A new console (`new`) goes in next to the one shown, on its right, and drops in from the top while the old one slides off to the
-left. A closed console drops off the bottom while the one to its left (or the next, if it was the first) slides in. The bar stays still, and the
+view is now. A new console (`new`) goes in next to the one shown, on its right, in two steps: first the old one slides off to the left, leaving empty space (the void, a dark blue by default), then the new one drops in from the top. Closing is two steps too: the closed console drops off the bottom, then the one to its left (or the next, if it was the first) slides in. Both together take one and a half times what one step does. The bar stays still, and the
 cursor is drawn once a console has landed. Everything is timed by the clock, so a slow terminal skips frames and the slide takes as long.
 
 ## Commands (after the colon)
@@ -61,10 +60,11 @@ cursor is drawn once a console has landed. Everything is timed by the clock, so 
 | `rename NAME` | name this console on the bar |
 | `list` | show the consoles on the bar for a moment |
 | `set transition slide\|dip\|dissolve\|crossfade` | how the switch looks: `slide` (the default) slides the screens along side by side, passing the ones between; `dip` fades the old screen to dark and the new one up; `dissolve` changes cell by cell; `crossfade` mixes the colours as vtshow does. (`set fade` still works) |
-| `set transition-ms N` | how long one step takes, 0 to 5000 (default 250; 0 switches at once). A slide over several consoles takes a little longer, up to twice as long |
+| `set transition-ms N` | how long one step takes, 0 to 5000 (default 1000; 0 switches at once). A slide over several consoles takes a little longer, up to twice as long |
+| `set void-color RRGGBB\|off` | the colour of the empty space while a console is opening or closing (default `101220`; `off` leaves it the terminal's own background) |
 | `set fps on\|off` | show the measured frame rate on the bar (off by default). `--fps N` sets the most frames a second (default 60) |
 | `quit` | close everything and leave |
-| `help` | the commands on the bar |
+| `help` | a card over the middle of the screen (about two thirds of it) with all the keys and commands. The console keeps running round it. `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End` scroll it when the screen is too small to show it all; `Enter`, `Space`, `Esc` or `q` closes it |
 
 A console whose program ends by itself (you type `exit`) closes. When the last one closes, vtmux ends and your terminal is put back as it
 was.

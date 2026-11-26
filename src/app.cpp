@@ -47,6 +47,9 @@ std::vector<std::string> split_words(const std::string& line) {
     return words;
 }
 
+// Opening and closing a console are two steps (the old screen goes, then the new one comes); the whole takes this many times what one step does.
+constexpr double TWO_STEP_FACTOR = 1.5;
+
 std::string base_name(const std::string& path) {
     const size_t slash = path.rfind('/');
     return slash == std::string::npos ? path : path.substr(slash + 1);
@@ -112,7 +115,7 @@ bool App::new_window(const std::vector<std::string>& command, const std::string&
     from_id_ = old_id;
     from_is_copy_ = false;
     kind_ = options_.style == TransitionStyle::Slide ? Kind::Open : Kind::Blend;
-    duration_ms_ = options_.fade_ms;
+    duration_ms_ = kind_ == Kind::Open ? options_.fade_ms * TWO_STEP_FACTOR : options_.fade_ms;
     transition_active_ = options_.fade_ms > 0;
     transition_start_ = now;
     return true;
@@ -122,6 +125,18 @@ bool App::new_window(const std::vector<std::string>& command, const std::string&
 void App::cancel_transition() {
     transition_active_ = false;
     from_is_copy_ = false;
+}
+
+// The empty space left while one screen has gone and the next has not come: the void colour (a blank cell if colour is off or the void is off).
+vtscreen::PicCell App::void_cell_() const {
+    vtscreen::PicCell c;
+    c.text = true;
+    c.ch = U' ';
+    if (options_.theme.color && options_.void_on) {
+        c.alt_lum = 1;
+        c.alt_r = options_.void_color[0]; c.alt_g = options_.void_color[1]; c.alt_b = options_.void_color[2];
+    }
+    return c;
 }
 
 // Where the view of the row of consoles is now, in consoles (a Strip transition).
@@ -175,7 +190,7 @@ void App::close_window(int index, double now, bool hang_up) {
         } else {
             kind_ = Kind::Blend;
         }
-        duration_ms_ = options_.fade_ms;
+        duration_ms_ = kind_ == Kind::Close ? options_.fade_ms * TWO_STEP_FACTOR : options_.fade_ms;
         transition_active_ = options_.fade_ms > 0;
         transition_start_ = now;
     }
@@ -217,9 +232,7 @@ void App::handle_input(const char* data, size_t size, double now) {
             keys_.feed(data + i + 1, size - i - 1);              // and what follows is for command mode
             Key key;
             while (keys_.next(key)) {
-                if (mode_ == Mode::Command) command_key(key, now);
-                else if (mode_ == Mode::CommandLine) line_key(key, now);
-                else forward(key.raw.data(), key.raw.size());    // command mode ended in the middle of this: the rest is normal input again
+                dispatch_key(key, now);    // command mode ended in the middle of this: the rest is normal input again
             }
             return;
         }
@@ -229,9 +242,7 @@ void App::handle_input(const char* data, size_t size, double now) {
     keys_.feed(data, size);
     Key key;
     while (keys_.next(key)) {
-        if (mode_ == Mode::Command) command_key(key, now);
-        else if (mode_ == Mode::CommandLine) line_key(key, now);
-        else forward(key.raw.data(), key.raw.size());
+        dispatch_key(key, now);
     }
 }
 
@@ -239,14 +250,19 @@ void App::tick(double now) {
     keys_.flush();
     Key key;
     while (keys_.next(key)) {                                    // a lone Escape settles here
-        if (mode_ == Mode::Command) command_key(key, now);
-        else if (mode_ == Mode::CommandLine) line_key(key, now);
-        else forward(key.raw.data(), key.raw.size());
+        dispatch_key(key, now);
     }
     for (int i = (int)windows_.size() - 1; i >= 0; i--)          // consoles whose program ended close
         if (windows_[(size_t)i].session->exited()) close_window(i, now, false);
     settle_transition(now);
     if (!message_.empty() && now >= message_until_) message_.clear();
+}
+
+void App::dispatch_key(const Key& key, double now) {
+    if (mode_ == Mode::Command) command_key(key, now);
+    else if (mode_ == Mode::CommandLine) line_key(key, now);
+    else if (mode_ == Mode::Help) help_key(key, now);
+    else forward(key.raw.data(), key.raw.size());
 }
 
 void App::command_key(const Key& key, double now) {
@@ -374,16 +390,238 @@ std::string App::run_command(const std::string& line, double now) {
             options_.fade_ms = ms;
             return "transition-ms: " + std::to_string(ms);
         }
+        if (w.size() >= 3 && w[1] == "void-color") {
+            if (w[2] == "off") { options_.void_on = false; return "void-color: off"; }
+            std::string hex = w[2][0] == '#' ? w[2].substr(1) : w[2];
+            if (hex.size() != 6 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) return "void-color: RRGGBB (hex) or off";
+            for (int i = 0; i < 3; i++) options_.void_color[i] = (int)std::strtol(hex.substr((size_t)i * 2, 2).c_str(), nullptr, 16);
+            options_.void_on = true;
+            return "void-color: #" + hex;
+        }
         if (w.size() >= 3 && w[1] == "fps") {
             if (w[2] != "on" && w[2] != "off") return "fps: on or off";
             show_fps_ = w[2] == "on";
             return "fps: " + w[2];
         }
-        return "set: transition slide|dip|dissolve|crossfade   transition-ms N   fps on|off";
+        return "set: transition slide|dip|dissolve|crossfade   transition-ms N   void-color RRGGBB|off   fps on|off";
     }
     if (cmd == "quit" || cmd == "q" || cmd == "exit") { done_ = true; return ""; }
-    if (cmd == "help") return "new [name] [-- cmd]  close  next  prev  goto N  rename N  list  set transition|transition-ms|fps  quit";
+    if (cmd == "help") { help_scroll_ = 0; set_mode(Mode::Help); return ""; }
     return "unknown command: " + cmd + "  (help)";
+}
+
+// ------------------------------------------------------------------------------------------------ the help card
+
+namespace {
+
+struct HelpItem { int kind; const char* key; const char* text; };       // kind: 0 a blank line, 1 a heading, 2 a key (or command) and what it does
+
+const HelpItem HELP[] = {
+    {1, "", "In normal mode every key goes to the console, except:"},
+    {2, "Ctrl-B", "Command mode: the bar turns amber and the keys below work"},
+    {0, "", ""},
+    {1, "", "In command mode"},
+    {2, "\xE2\x86\x90 \xE2\x86\x92", "The previous or next console. Stay in command mode to keep flipping; from the last, Right goes all the way back to the first"},
+    {2, "1 to 9", "Go to that console"},
+    {2, "c  n  p", "A new console, the next, the previous"},
+    {2, "\xE2\x86\x91 \xE2\x86\x93 PgUp PgDn Home", "Look back through the console's history; End or Esc comes back"},
+    {2, ":", "Type a command (see below)"},
+    {2, "Esc  Enter", "Back to normal mode"},
+    {2, "Ctrl-B", "Send a real Ctrl-B to the program"},
+    {0, "", ""},
+    {1, "", "Commands, typed after the colon"},
+    {2, "new [name] [-- cmd]", "A new console next to this one, running your shell or the command"},
+    {2, "close", "Close this console (the last one closing leaves vtmux)"},
+    {2, "next   prev", "Switch to the next or previous console"},
+    {2, "goto N", "Switch to console N"},
+    {2, "rename NAME", "Name this console on the bar"},
+    {2, "list", "Show the consoles on the bar for a moment"},
+    {2, "set transition STYLE", "How switching looks: slide, dip, dissolve or crossfade"},
+    {2, "set transition-ms N", "How long one step takes, 0 to 5000 (0 switches at once)"},
+    {2, "set void-color RRGGBB", "The colour of the empty space while a console is opening or closing (or off)"},
+    {2, "set fps on|off", "Show the frame rate on the bar"},
+    {2, "help", "This card"},
+    {2, "quit", "Close everything and leave"},
+};
+
+// UTF-8 text as code points (a cell each is assumed)
+std::u32string to_u32(const std::string& s) {
+    std::u32string out;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
+        char32_t cp = n == 1 ? c : (n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07));
+        for (int k = 1; k < n && i + (size_t)k < s.size(); k++) cp = (cp << 6) | ((unsigned char)s[i + (size_t)k] & 0x3F);
+        out += cp;
+        i += (size_t)n;
+    }
+    return out;
+}
+
+// the words of text broken into lines of at most `width` cells (a word longer than that is cut)
+std::vector<std::string> wrap_words(const std::string& text, int width) {
+    std::vector<std::string> lines;
+    std::string cur;
+    size_t cur_len = 0;
+    std::istringstream in(text);
+    std::string word;
+    while (in >> word) {
+        while ((int)utf8_len(word) > width && width > 0) {                 // too long for a line by itself
+            if (!cur.empty()) { lines.push_back(cur); cur.clear(); cur_len = 0; }
+            lines.push_back(utf8_cut(word, (size_t)width));
+            word = word.substr(utf8_cut(word, (size_t)width).size());
+        }
+        const size_t wl = utf8_len(word);
+        if (!cur.empty() && cur_len + 1 + wl > (size_t)width) { lines.push_back(cur); cur.clear(); cur_len = 0; }
+        if (!cur.empty()) { cur += ' '; cur_len++; }
+        cur += word;
+        cur_len += wl;
+    }
+    if (!cur.empty() || lines.empty()) lines.push_back(cur);
+    return lines;
+}
+
+struct HelpLine {
+    std::string key;                             // drawn at the left, in the key colour
+    std::string text;
+    int text_col = 0;
+    bool heading = false;
+};
+
+// The help as lines of a card `width` cells wide: two columns (the key, then what it does, wrapped) if there is room, otherwise the key on a line
+// of its own and what it does indented under it.
+std::vector<HelpLine> help_lines(int width) {
+    std::vector<HelpLine> lines;
+    const int key_col = 24;
+    const bool two_columns = width >= key_col + 20;
+    for (const HelpItem& item : HELP) {
+        if (item.kind == 0) { lines.push_back(HelpLine()); continue; }
+        if (item.kind == 1) {
+            for (const std::string& t : wrap_words(item.text, width)) { HelpLine l; l.text = t; l.heading = true; lines.push_back(l); }
+            continue;
+        }
+        const int indent = two_columns ? key_col : 2;
+        const std::vector<std::string> parts = wrap_words(item.text, std::max(width - indent, 1));
+        if (two_columns) {
+            for (size_t i = 0; i < parts.size(); i++) {
+                HelpLine l;
+                if (i == 0) l.key = item.key;
+                l.text = parts[i];
+                l.text_col = indent;
+                lines.push_back(l);
+            }
+        } else {
+            HelpLine k; k.key = item.key; lines.push_back(k);
+            for (const std::string& t : parts) { HelpLine l; l.text = t; l.text_col = indent; lines.push_back(l); }
+        }
+    }
+    return lines;
+}
+
+// Where the card is on a body of rows x cols: about two thirds of it each way (not under a small size, not wider than 90).
+struct CardBox { int left, top, width, height; };
+CardBox card_box(int body_rows, int cols) {
+    CardBox b;
+    b.height = std::min(body_rows, std::max(body_rows * 2 / 3, 12));
+    b.width = std::min(cols, std::min(90, std::max(cols * 2 / 3, 44)));
+    b.left = (cols - b.width) / 2;
+    b.top = (body_rows - b.height) / 2;
+    return b;
+}
+
+}  // namespace
+
+int App::help_max_scroll() const {
+    const CardBox box = card_box(std::max(rows_ - 1, 1), cols_);
+    if (box.width < 8 || box.height < 3) return 0;
+    const int inner_rows = box.height - 2;
+    return std::max(0, (int)help_lines(box.width - 4).size() - inner_rows);
+}
+
+void App::help_key(const Key& key, double now) {
+    (void)now;
+    const int page = std::max(1, card_box(std::max(rows_ - 1, 1), cols_).height - 3);
+    const int last = help_max_scroll();
+    switch (key.kind) {
+        case KeyKind::Escape: case KeyKind::Enter: set_mode(Mode::Normal); return;
+        case KeyKind::Char:
+            if (key.ch == U' ' || key.ch == U'q') set_mode(Mode::Normal);
+            return;
+        case KeyKind::Up: help_scroll_ -= 1; break;
+        case KeyKind::Down: help_scroll_ += 1; break;
+        case KeyKind::PageUp: help_scroll_ -= page; break;
+        case KeyKind::PageDown: help_scroll_ += page; break;
+        case KeyKind::Home: help_scroll_ = 0; break;
+        case KeyKind::End: help_scroll_ = last; break;
+        default: return;
+    }
+    help_scroll_ = std::max(0, std::min(help_scroll_, last));
+}
+
+// `out` becomes `base` with the help card drawn over it (about two thirds of the screen, in the middle; the console shows round it).
+void App::draw_help(const vtscreen::Picture& base, vtscreen::Picture& out) {
+    using vtscreen::PicCell;
+    out.retained = false;
+    out.rows = base.rows; out.cols = base.cols;
+    out.cell = base.cell;
+    out.touch_all();
+    const int body = base.rows - 1;
+    const CardBox box = card_box(std::max(body, 1), base.cols);
+    if (box.width < 8 || box.height < 3 || body < 3) return;                // too small for a card: the bar says what to do
+
+    const bool color = options_.theme.color;
+    const int text_w = box.width - 4, inner_rows = box.height - 2;
+    const std::vector<HelpLine> lines = help_lines(text_w);
+    const int last = std::max(0, (int)lines.size() - inner_rows);
+    help_scroll_ = std::max(0, std::min(help_scroll_, last));
+
+    auto put = [&](int row, int col, char32_t ch, const int fg[3]) {
+        if (row < 0 || row >= body || col < 0 || col >= base.cols) return;
+        PicCell p;
+        p.text = true;
+        p.ch = ch;
+        if (color) {
+            p.r = fg[0]; p.g = fg[1]; p.b = fg[2];
+            p.alt_lum = 1; p.alt_r = 22; p.alt_g = 26; p.alt_b = 38;       // the card's own background
+        }
+        out.cell[(size_t)row * base.cols + (size_t)col] = p;
+    };
+    auto put_text = [&](int row, int col, const std::string& s, const int fg[3], int limit) {
+        int n = 0;
+        for (char32_t ch : to_u32(s)) { if (n >= limit) break; put(row, col + n, ch, fg); n++; }
+    };
+
+    const int amber[3] = {255, 165, 40}, white[3] = {240, 240, 240}, grey[3] = {204, 204, 204}, blue[3] = {90, 160, 220};
+    const int r0 = box.top, c0 = box.left, r1 = box.top + box.height - 1, c1 = box.left + box.width - 1;
+    for (int r = r0; r <= r1; r++)
+        for (int c = c0; c <= c1; c++) {
+            char32_t ch = U' ';
+            if (r == r0 || r == r1) ch = c == c0 ? (r == r0 ? U'┌' : U'└') : c == c1 ? (r == r0 ? U'┐' : U'┘') : U'─';
+            else if (c == c0 || c == c1) ch = U'│';
+            put(r, c, ch, amber);
+        }
+    put_text(r0, c0 + 2, " vtmux help ", white, box.width - 4);
+    for (int i = 0; i < inner_rows; i++) {
+        const size_t at = (size_t)(help_scroll_ + i);
+        if (at >= lines.size()) break;
+        const HelpLine& l = lines[at];
+        const int row = r0 + 1 + i, col = c0 + 2;
+        if (l.heading) put_text(row, col, l.text, blue, text_w);
+        else {
+            if (!l.key.empty()) put_text(row, col, l.key, white, text_w);
+            if (!l.text.empty()) put_text(row, col + l.text_col, l.text, grey, text_w - l.text_col);
+        }
+    }
+    std::string foot = " Enter or Space to close ";
+    if (last > 0) {
+        foot = " \xE2\x86\x91\xE2\x86\x93 scroll  " + std::to_string(help_scroll_ + 1) + "-" + std::to_string(std::min((int)lines.size(), help_scroll_ + inner_rows)) +
+               " of " + std::to_string(lines.size()) + "  Enter or Space to close ";
+    }
+    const std::u32string f = to_u32(foot);
+    const int room = box.width - 4;
+    const int start = c0 + 2;
+    int n = 0;
+    for (char32_t ch : f) { if (n >= room) break; put(r1, start + n, ch, amber); n++; }
 }
 
 // ------------------------------------------------------------------------------------------------ drawing
@@ -415,7 +653,8 @@ void App::draw_bar(vtscreen::Picture& pic, double now) {
     std::string right;
     size_t history = 0;
     const size_t back = windows_.empty() ? 0 : windows_[(size_t)active_].session->scroll_back(&history);
-    if (mode_ == Mode::Command && back > 0) right = "SCROLL -" + std::to_string(back) + "/" + std::to_string(history) + "  \xE2\x86\x91\xE2\x86\x93 PgUp PgDn Home End   Esc live";
+    if (mode_ == Mode::Help) right = "HELP  \xE2\x86\x91\xE2\x86\x93 scroll   Enter or Space: close";
+    else if (mode_ == Mode::Command && back > 0) right = "SCROLL -" + std::to_string(back) + "/" + std::to_string(history) + "  \xE2\x86\x91\xE2\x86\x93 PgUp PgDn Home End   Esc live";
     else if (mode_ == Mode::Command) right = "COMMAND  \xE2\x86\x90 \xE2\x86\x92 switch  \xE2\x86\x91 history  : command  1-9 go  Esc back";
     else if (!message_.empty() && now < message_until_) right = message_;
     else right = "vtmux  ^B for commands";
@@ -432,10 +671,20 @@ const vtscreen::Picture& App::frame(double now) {
     if (windows_.empty()) return mixed_;
 
     // the frame rate, measured over about half a second
+    // (the frame that starts a window is not counted in it: n gaps between frames are n frames after the first)
     if (fps_since_ < 0 || now < fps_since_) { fps_since_ = now; fps_frames_ = 0; }
-    fps_frames_++;
-    if (now - fps_since_ >= 0.5) { fps_ = fps_frames_ / (now - fps_since_); fps_since_ = now; fps_frames_ = 0; }
+    else {
+        fps_frames_++;
+        if (now - fps_since_ >= 0.5) { fps_ = fps_frames_ / (now - fps_since_); fps_since_ = now; fps_frames_ = 0; }
+    }
 
+    const vtscreen::Picture& base = frame_base(now);
+    if (mode_ != Mode::Help) return base;
+    draw_help(base, card_pic_);                  // the console goes on underneath: it was published into `base` just now
+    return card_pic_;
+}
+
+const vtscreen::Picture& App::frame_base(double now) {
     Window& act = windows_[(size_t)active_];
     const bool moving = transition_active_ && kind_ != Kind::Blend;        // (while things slide, no cursor is drawn)
     act.session->publish(act.pic, !moving, options_.theme);
@@ -457,19 +706,30 @@ const vtscreen::Picture& App::frame(double now) {
         return mixed_;
     }
     const int body = act.pic.rows - 1;
-    const double e = ease_out(pct);
-    if (kind_ == Kind::Open) {                       // the new console drops in over the old one, which slides off to the left
-        Window* old = find(from_id_);
-        if (old) {
+    // Opening and closing are two steps, one after the other, with the void between: the first half is the old screen leaving, the second
+    // the new one arriving.
+    const bool leaving = pct < 0.5;
+    const double leave = ease_in(std::min(1.0, pct * 2.0));                   // 0 to 1 over the first half: speeding up as it goes
+    const double arrive = ease_out(std::max(0.0, pct * 2.0 - 1.0));           // 0 to 1 over the second half: slowing to a stop
+    const vtscreen::PicCell void_cell = void_cell_();
+    if (kind_ == Kind::Open) {                       // the old console slides off to the left, then the new one drops in from the top
+        if (leaving) {
+            Window* old = find(from_id_);
+            if (!old) return act.pic;
             old->session->publish(old->pic, false, options_.theme);
-            compose({{&old->pic, -(int)std::lround(e * act.pic.cols), 0}, {&act.pic, 0, -(int)std::lround((1.0 - e) * body)}}, act.pic, mixed_);
-            return mixed_;
+            compose({{&old->pic, -(int)std::lround(leave * act.pic.cols), 0}}, act.pic, mixed_, void_cell);
+        } else {
+            compose({{&act.pic, 0, -(int)std::lround((1.0 - arrive) * body)}}, act.pic, mixed_, void_cell);
         }
-        return act.pic;
+        return mixed_;
     }
-    if (kind_ == Kind::Close) {                      // the console that closed drops off the bottom, the one that replaces it slides in
-        const int side = close_from_right_ ? 1 : -1;
-        compose({{&act.pic, side * (int)std::lround((1.0 - e) * act.pic.cols), 0}, {&from_copy_, 0, (int)std::lround(e * body)}}, act.pic, mixed_);
+    if (kind_ == Kind::Close) {                      // the console that closed drops off the bottom, then the one that replaces it slides in
+        if (leaving) {
+            compose({{&from_copy_, 0, (int)std::lround(leave * body)}}, act.pic, mixed_, void_cell);
+        } else {
+            const int side = close_from_right_ ? 1 : -1;
+            compose({{&act.pic, side * (int)std::lround((1.0 - arrive) * act.pic.cols), 0}}, act.pic, mixed_, void_cell);
+        }
         return mixed_;
     }
     const vtscreen::Picture* from = nullptr;

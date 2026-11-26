@@ -34,9 +34,9 @@ Commands (after `:`):
 | `next`, `prev`, `goto N` | switch, with the transition |
 | `rename NAME` | name this console |
 | `list` | show the consoles on the bar for a moment |
-| `set transition slide\|dip\|dissolve\|crossfade`, `set transition-ms N`, `set fps on\|off` | how, and how long, the switch looks; the frame rate on the bar |
+| `set transition slide\|dip\|dissolve\|crossfade`, `set transition-ms N`, `set void-color RRGGBB\|off`, `set fps on\|off` | how, and how long, the switch looks; the frame rate on the bar |
 | `quit` | close everything and leave |
-| `help` | the keys and commands on the bar |
+| `help` | a card over the middle of the screen (about 2/3, at most 90 wide) listing the keys and commands; the console runs on underneath; arrows scroll, Enter/Space/Esc/q close (mode `Help`) |
 
 A console that ends by itself (the shell exits) closes. Closing the last one leaves vtmux.
 
@@ -56,7 +56,7 @@ A console that ends by itself (the shell exits) closes. Closing the last one lea
 | emulator | `src/emulator.*`, `src/width.*` | the terminal in memory: cells, cursor, scrollback, alt screen, modes, replies | done, being completed (VT52, VT102 extras) |
 | keys | `src/keys.*` | raw input bytes to key events (arrows, F keys, Escape, paste) for command mode | done, tested |
 | painter | `src/render.*` | emulator dirty rows to a retained vtscreen Picture (colours, bold, reverse, cursor) | done, tested |
-| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark; and `compose`, which places screens on a surface for the slide (a row of consoles; a drop in from the top; a drop off the bottom). Slide is the default; (dip: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy) | done, tested |
+| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark; and `compose`, which places screens on a surface for the slide (a row of consoles; opening: the old one slides off left, then the new one drops in from the top; closing: the old one drops off the bottom, then the neighbour slides in; the void between is a fill colour). Slide is the default; (dip: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy) | done, tested |
 | session | `src/session.*` | forkpty, the reader thread, the lock, resize, exit (closes every inherited descriptor in the child) | done, tested |
 | app | `src/app.*` | the modes, the command line, the window list, the bar, the transition in progress | done, tested |
 | main | `src/main.cpp` | options, the loop, the terminal modes (resets the frame schedule every frame, so a burst of keys cannot push later frames away) | done, e2e tested |

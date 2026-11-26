@@ -427,6 +427,15 @@ void test_compose_slide() {
     CHECK(out.cell[(size_t)2 * 10 + 3] == PicCell());
     CHECK(out.cell[(size_t)2 * 10 + 4] == a.cell[(size_t)1 * 10 + 0]);
 
+    // what no layer covers is the fill, not the default cell
+    PicCell fill;
+    fill.text = true; fill.ch = U'.'; fill.alt_lum = 1; fill.alt_r = 5;
+    compose({{&a, 3, 0}}, a, out, fill);
+    CHECK(out.cell[(size_t)0 * 10 + 0] == fill);
+    CHECK(out.cell[(size_t)3 * 10 + 2] == fill);
+    CHECK(out.cell[(size_t)0 * 10 + 3] == a.cell[0]);
+    CHECK(out.cell[(size_t)4 * 10 + 0] == a.cell[(size_t)4 * 10 + 0]);                    // the bar row is not the fill
+
     // odd sizes are safe
     Picture empty;
     compose({{&a, 0, 0}}, empty, out);
@@ -452,6 +461,12 @@ void test_ease_and_slide_time() {
         CHECK(e >= i / 100.0 - 1e-12);
         last = e;
     }
+    CHECK_EQ(ease_in(0.0), 0.0);
+    CHECK_EQ(ease_in(1.0), 1.0);
+    CHECK_EQ(ease_in(std::nan("")), 0.0);
+    CHECK_EQ(ease_in(-1.0), 0.0);
+    CHECK_EQ(ease_in(2.0), 1.0);
+    for (int i = 1; i < 100; i++) CHECK(ease_in(i / 100.0) <= i / 100.0 + 1e-12);        // slow at first: behind a straight line
     CHECK_EQ(slide_ms(1, 250), 250.0);                              // one step: the base
     CHECK(slide_ms(2, 250) > 250 && slide_ms(2, 250) < 500);
     CHECK_EQ(slide_ms(9, 250), 500.0);                              // capped at twice
