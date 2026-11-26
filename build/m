@@ -1,0 +1,40 @@
+#!/bin/sh
+# Build (or rebuild) vtmux. Run it from this directory:   ./m
+#   ./m          build vtmux (configures first if needed)
+#   ./m test     build everything, including the tests, and run them
+#   ./m clean    remove what was built (this script stays)
+# The program ends up here as ./vtmux
+set -e
+cd "$(dirname "$0")"
+
+jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+if [ "$1" = "clean" ]; then
+    find . -mindepth 1 -maxdepth 1 ! -name m -exec rm -rf {} +
+    echo "cleaned"
+    exit 0
+fi
+
+# what it needs
+command -v cmake >/dev/null 2>&1 || { echo "m: cmake is not installed (on Debian or Ubuntu: sudo apt install cmake)" >&2; exit 1; }
+command -v c++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1 || { echo "m: no C++ compiler (on Debian or Ubuntu: sudo apt install g++)" >&2; exit 1; }
+
+# the drawing library is a git submodule: fetch it if the clone was made without it
+if [ ! -f ../vtscreen/vtscreen.h ]; then
+    if command -v git >/dev/null 2>&1 && [ -e ../.git ]; then
+        echo "m: fetching vtscreen (git submodule)"
+        git -C .. submodule update --init --recursive --depth 1
+    fi
+    [ -f ../vtscreen/vtscreen.h ] || { echo "m: ../vtscreen is missing (clone with: git clone --recursive https://github.com/briefnotion/vtmux.git)" >&2; exit 1; }
+fi
+
+cmake -S .. -B . >/dev/null
+
+if [ "$1" = "test" ]; then
+    cmake --build . -j "$jobs"
+    ctest --output-on-failure -j "$jobs"
+else
+    cmake --build . --target vtmux -j "$jobs"
+    echo
+    echo "built: $(pwd)/vtmux"
+fi

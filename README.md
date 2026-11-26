@@ -19,11 +19,13 @@ machine parser and a screen in memory that is tested against `tmux` and `pyte`.
 Linux, `g++` with C++17, `cmake` 3.16 or later, `git`:
 
     git clone --recursive --shallow-submodules --depth 1 https://github.com/briefnotion/vtmux.git
-    cd vtmux
-    cmake -B build && cmake --build build -j4
-    ./build/vtmux
+    cd vtmux/build
+    ./m
+    ./vtmux
 
-If `vtscreen/` is empty, run `git submodule update --init`. `-DVTMUX_TESTS=OFF` skips building the tests.
+`./m` (in the `build` directory) builds vtmux, or rebuilds it after a change. It also fetches the `vtscreen` submodule if the clone was made
+without it, and tells you if `cmake` or a compiler is missing. `./m test` builds the tests too and runs them, and `./m clean` removes what
+was built. The same thing by hand: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` skips building the tests.
 
     vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
 
