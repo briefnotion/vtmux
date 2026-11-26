@@ -479,7 +479,29 @@ void test_ease_and_slide_time() {
     for (double st = 0.05; st < 12; st += 0.05) { const double ms = slide_ms(st, 250); CHECK(ms >= prev); prev = ms; }   // never shorter for a longer way
 }
 
+void test_dissolve_keeps_wide_pairs() {
+    // a has a wide letter over columns 2 and 3; b has ordinary letters there: no pct shows half of the pair
+    Picture a = make(3, 8, 11, U'a'), b = make(3, 8, 12, U'A');
+    for (int r = 0; r < 3; r++) {
+        PicCell h = a.at(r, 2), t = a.at(r, 3);
+        h.ch = 0x4E2D; h.attrs = vtscreen::CELL_WIDE; t.ch = U' '; t.attrs = vtscreen::CELL_TAIL;
+        a.at(r, 2) = h; a.at(r, 3) = t;
+    }
+    Picture out;
+    for (int k = 1; k < 100; k++) {
+        blend(a, b, k / 100.0, TransitionStyle::Dissolve, out);
+        for (int r = 0; r < 3; r++) {
+            const bool head = (out.at(r, 2).attrs & vtscreen::CELL_WIDE) != 0, tail = (out.at(r, 3).attrs & vtscreen::CELL_TAIL) != 0;
+            CHECK(head == tail);
+        }
+    }
+    // and with the pair in a going to a plain b the other way round
+    blend(b, a, 0.5, TransitionStyle::Dissolve, out);
+    for (int r = 0; r < 3; r++) CHECK(((out.at(r, 2).attrs & vtscreen::CELL_WIDE) != 0) == ((out.at(r, 3).attrs & vtscreen::CELL_TAIL) != 0));
+}
+
 int main() {
+    test_dissolve_keeps_wide_pairs();
     test_compose_slide();
     test_ease_and_slide_time();
     test_names();

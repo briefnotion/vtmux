@@ -228,6 +228,29 @@ def test_utf8_and_input_exactness():
     r.send("printf '%s' 'a\x01b' | od -An -c\n"); r.pump(0.5)
     r.send('exit\n'); r.wait_exit(); r.close()
 
+def test_attributes_and_wide():
+    r = start()
+    # bold, italic, underline, strikethrough, blink, and wide letters, printed by the shell and read back from what the terminal was told
+    r.send("printf '\\033[1mBOLD\\033[0m \\033[3mITAL\\033[0m \\033[4mUNDR\\033[0m \\033[9mSTRK\\033[0m \\033[5mBLNK\\033[0m WIDE:\\xe6\\x97\\xa5\\xe6\\x9c\\xac|END\\n'\n")
+    check(r.wait_for('BOLD'), 'the attribute line appears')
+    r.pump(0.4)
+    row = next((i for i, l in enumerate(r.screen.display) if 'BOLD' in l and 'printf' not in l), None)
+    check(row is not None, 'found the line')
+    if row is not None:
+        buf = r.screen.buffer[row]
+        line = r.screen.display[row]
+        def attr_of(word):
+            col = line.index(word)
+            return buf[col]
+        check(attr_of('BOLD').bold, 'bold reaches the terminal')
+        check(attr_of('ITAL').italics, 'italic reaches the terminal')
+        check(attr_of('UNDR').underscore, 'underline reaches the terminal')
+        check(attr_of('STRK').strikethrough, 'strikethrough reaches the terminal')
+        check(getattr(attr_of('BLNK'), 'blink', False), 'blink reaches the terminal')
+        check(not attr_of('WIDE').bold and not attr_of('WIDE').underscore, 'the attributes stop where they should')
+        check('WIDE:日本|END' in line, 'wide letters arrive as letters (not question marks): ' + line.strip())
+    r.send('exit\n'); r.wait_exit(); r.close()
+
 def test_no_color_and_args():
     r = Run(['--no-color'])
     r.send('echo READY$((20+22))\n')
@@ -283,7 +306,7 @@ def test_kill_leaves_nothing():
 
 TESTS = [test_basic, test_ctrl_c_and_z, test_resize, test_commands_and_switching, test_alt_screen_programs, test_top_and_htop,
          test_mode_mirroring, test_utf8_and_input_exactness, test_no_color_and_args, test_heavy_output_and_idle,
-         test_rapid_switching, test_kill_leaves_nothing]
+         test_rapid_switching, test_kill_leaves_nothing, test_attributes_and_wide]
 
 if __name__ == '__main__':
     if not os.path.exists(BIN):

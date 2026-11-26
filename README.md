@@ -87,8 +87,9 @@ paste, mouse, focus) and takes it out of them again on the way out.
 
 ## What is not done yet
 
-- Underline, italic, strikethrough and blink are not drawn, and wide characters (Chinese, emoji) show as `?`: vtscreen's cells do not
-  have those yet (a later step is to give them to vtscreen).
+- Bold, italic, underline, strikethrough and blink are sent to your terminal as the usual codes, and wide characters (Chinese, emoji) take two
+  columns. How they look, or whether they show at all (blink and italic often do not), is up to the terminal program. Combining marks are
+  dropped, and a letter the terminal draws at a different width from the emulator's table can look odd.
 - No detach and attach (there is no server), no splits, no copy mode (the history can be looked at, not selected from), no mouse commands, no config file.
 - Not supported by the emulator: sixel, double height lines, the 132 column mode (the screen clears but does not resize), combining
   marks (they are dropped).

@@ -93,13 +93,14 @@ A transition mixes two sessions' pictures into a third with `blend`, then the ba
 
 Cell mapping (vtscreen text cells): the character; foreground r,g,b (the 256 palette resolved here, the default foreground a theme
 colour); the background as the alt colour (none for the default background, so the terminal's own background shows); reverse is the
-cell's `inv`; bold brightens palette colours 0 to 7; dim scales the colour; hidden is a space. Not yet drawn, because vtscreen cells
-have no such attributes: underline, italic, strikethrough, blink, and wide characters (a later step is to give vtscreen those).
+cell's `inv`; bold brightens palette colours 0 to 7 and is also the bold attribute; dim scales the colour; hidden is a space (with no
+attributes); italic, underline, strikethrough and blink are cell attributes that vtscreen sends to the terminal. A wide character is a
+`CELL_WIDE` cell and a `CELL_TAIL` cell (vtscreen draws the pair once and turns a torn pair into a blank, so slides and dissolves are safe).
 
 ## Not in the first version
 
 Detach and attach (a server and clients), splits (panes within a screen; the design allows it: a Session is just a picture source),
-copy mode (scrollback browsing is done: Up/Down/PageUp/PageDown/Home/End in command mode), mouse, a config file, the wide character and underline attributes.
+copy mode (scrollback browsing is done: Up/Down/PageUp/PageDown/Home/End in command mode), mouse, a config file.
 
 ## Testing
 

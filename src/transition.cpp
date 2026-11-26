@@ -105,7 +105,10 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
         } else if (style == TransitionStyle::Dissolve) {
             for (int r = 0; r < body; r++)
                 for (int c = 0; c < cc; c++) {
-                    const Picture& s = threshold(r, c) < pct ? b : a;
+                    // the second half of a wide letter changes over with its first half (the same threshold), so a pair is not torn apart
+                    const bool tail = c > 0 && ((a.cell[(size_t)r * a.cols + c].attrs & vtscreen::CELL_TAIL) ||
+                                                (b.cell[(size_t)r * b.cols + c].attrs & vtscreen::CELL_TAIL));
+                    const Picture& s = threshold(r, tail ? c - 1 : c) < pct ? b : a;
                     out.cell[(size_t)r * ocols + c] = s.cell[(size_t)r * s.cols + c];
                 }
         } else {                                   // Dip: a fades to dark by the half way point, then b fades up from dark

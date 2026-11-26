@@ -192,10 +192,43 @@ void test_reverse_and_ignored() {
     CHECK(at(p, 0, 0).inv);
     CHECK(rgb_is(at(p, 0, 0), 204, 204, 204));        // reverse is the inv flag; the colours are not swapped here
     CHECK(!at(p, 0, 1).inv);
-    // underline, italic, strike and blink are not drawn: the cell is just its letter
+    // underline, italic, strike and blink are passed to vtscreen as attributes of the cell, with the same letter and colours as a plain cell
     CHECK_EQ((int)at(p, 0, 2).ch, (int)U'U');
     CHECK(!at(p, 0, 2).inv);
-    CHECK(at(p, 0, 2) == [&] { PicCell c = at(p, 0, 1); c.ch = U'U'; return c; }());
+    CHECK_EQ((int)at(p, 0, 2).attrs, (int)(vtscreen::CELL_UNDERLINE | vtscreen::CELL_ITALIC | vtscreen::CELL_STRIKE | vtscreen::CELL_BLINK));
+    CHECK_EQ((int)at(p, 0, 1).attrs, 0);
+    CHECK(at(p, 0, 2) == [&] { PicCell c = at(p, 0, 1); c.ch = U'U'; c.attrs = at(p, 0, 2).attrs; return c; }());
+}
+
+void test_attributes() {
+    Emulator e(2, 30);
+    Picture p = make_pic(2, 30);
+    PanePainter pp;
+    e.feed("\x1b[1mB\x1b[0m\x1b[3mI\x1b[0m\x1b[4mU\x1b[0m\x1b[9mS\x1b[0m\x1b[5mK\x1b[0m\x1b[1;4mX\x1b[22mY\x1b[24mZ");
+    pp.paint(e, p, false, Theme());
+    CHECK_EQ((int)at(p, 0, 0).attrs, (int)vtscreen::CELL_BOLD);              // bold is also brighter (see test_bold): both
+    CHECK_EQ((int)at(p, 0, 1).attrs, (int)vtscreen::CELL_ITALIC);
+    CHECK_EQ((int)at(p, 0, 2).attrs, (int)vtscreen::CELL_UNDERLINE);
+    CHECK_EQ((int)at(p, 0, 3).attrs, (int)vtscreen::CELL_STRIKE);
+    CHECK_EQ((int)at(p, 0, 4).attrs, (int)vtscreen::CELL_BLINK);
+    CHECK_EQ((int)at(p, 0, 5).attrs, (int)(vtscreen::CELL_BOLD | vtscreen::CELL_UNDERLINE));
+    CHECK_EQ((int)at(p, 0, 6).attrs, (int)vtscreen::CELL_UNDERLINE);         // 22 took bold off only
+    CHECK_EQ((int)at(p, 0, 7).attrs, 0);                                     // 24 took the underline off
+    // an underlined blank is a blank cell with the attribute (the Display draws it)
+    e.feed("\x1b[2;1H\x1b[4m  \x1b[0m");
+    pp.paint(e, p, false, Theme());
+    CHECK_EQ((int)at(p, 1, 0).ch, (int)U' ');
+    CHECK_EQ((int)at(p, 1, 0).attrs, (int)vtscreen::CELL_UNDERLINE);
+    // concealed text shows nothing, not even a line
+    e.feed("\x1b[2;5H\x1b[8;4mhid\x1b[0m");
+    pp.paint(e, p, false, Theme());
+    CHECK_EQ((int)at(p, 1, 4).ch, (int)U' ');
+    CHECK_EQ((int)at(p, 1, 4).attrs, 0);
+    // without colour the attributes are still there
+    Theme nc; nc.color = false;
+    pp.invalidate();
+    pp.paint(e, p, false, nc);
+    CHECK_EQ((int)at(p, 0, 2).attrs, (int)vtscreen::CELL_UNDERLINE);
 }
 
 void test_wide() {
@@ -204,11 +237,15 @@ void test_wide() {
     PanePainter pp;
     e.feed("\x1b[31;44m\xE6\x97\xA5\xE6\x9C\xAC\x1b[0mx");     // two wide characters, then x
     pp.paint(e, p, false, Theme());
-    CHECK_EQ((int)at(p, 0, 0).ch, (int)U'?');
+    CHECK_EQ((int)at(p, 0, 0).ch, (int)0x65E5);                                        // the letters themselves now
+    CHECK_EQ((int)at(p, 0, 0).attrs, (int)vtscreen::CELL_WIDE);
     CHECK_EQ((int)at(p, 0, 1).ch, (int)U' ');
-    CHECK_EQ((int)at(p, 0, 2).ch, (int)U'?');
-    CHECK_EQ((int)at(p, 0, 3).ch, (int)U' ');
+    CHECK_EQ((int)at(p, 0, 1).attrs, (int)vtscreen::CELL_TAIL);
+    CHECK_EQ((int)at(p, 0, 2).ch, (int)0x672C);
+    CHECK_EQ((int)at(p, 0, 2).attrs, (int)vtscreen::CELL_WIDE);
+    CHECK_EQ((int)at(p, 0, 3).attrs, (int)vtscreen::CELL_TAIL);
     CHECK_EQ((int)at(p, 0, 4).ch, (int)U'x');
+    CHECK_EQ((int)at(p, 0, 4).attrs, 0);
     CHECK(rgb_is(at(p, 0, 0), 205, 0, 0));            // the head keeps its colours
     CHECK(alt_is(at(p, 0, 0), 0, 0, 238));
     CHECK(alt_is(at(p, 0, 1), 0, 0, 238));            // and so does the tail's background
@@ -582,6 +619,7 @@ int main() {
     test_dim();
     test_hidden();
     test_reverse_and_ignored();
+    test_attributes();
     test_wide();
     test_cursor_drawn_and_removed();
     test_cursor_moves_repaint_old_row();

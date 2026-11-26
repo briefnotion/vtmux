@@ -22,20 +22,28 @@ double scale_channel(double v, double k) { return std::floor(v * k + 0.5); }
 
 // One emulator cell as a vtscreen text cell. `flip` toggles inverse video (the cursor, and the reversed screen).
 //
-// Not drawn, because a vtscreen text cell has no such attribute yet: underline, italic, strikethrough and blink.
-// Wide characters: vtscreen cannot draw a character that takes two columns, so the first cell of one is drawn as a '?'
-// (with its colours) and the second as a space. A later step adds wide characters to vtscreen; then this is the
-// one place to change.
+// Bold, italic, underline, strikethrough and blink are passed to vtscreen as cell attributes (the terminal program decides how, and whether, to
+// draw them); bold is also drawn brighter (see Theme). A wide character is its first cell (CELL_WIDE, with the letter) and its second (CELL_TAIL).
 vtscreen::PicCell to_pic(const Cell& k, const Theme& theme, bool flip) {
     vtscreen::PicCell p;
     p.text = true;
 
     char32_t ch = k.ch;
     if (k.attrs & ATTR_WIDE_TAIL) ch = U' ';
-    else if (k.attrs & ATTR_WIDE) ch = U'?';
     else if (ch == 0 || ch > 0x10FFFF || (ch >= 0xD800 && ch <= 0xDFFF)) ch = U' ';
     if (k.attrs & ATTR_HIDDEN) ch = U' ';
     p.ch = ch;
+
+    // what the terminal is told about the cell (concealed text shows nothing, not even a line under it)
+    if (!(k.attrs & ATTR_HIDDEN)) {
+        if (k.attrs & ATTR_BOLD) p.attrs |= vtscreen::CELL_BOLD;
+        if (k.attrs & ATTR_ITALIC) p.attrs |= vtscreen::CELL_ITALIC;
+        if (k.attrs & ATTR_UNDERLINE) p.attrs |= vtscreen::CELL_UNDERLINE;
+        if (k.attrs & ATTR_STRIKE) p.attrs |= vtscreen::CELL_STRIKE;
+        if (k.attrs & ATTR_BLINK) p.attrs |= vtscreen::CELL_BLINK;
+    }
+    if (k.attrs & ATTR_WIDE_TAIL) p.attrs |= vtscreen::CELL_TAIL;
+    else if (k.attrs & ATTR_WIDE) p.attrs |= vtscreen::CELL_WIDE;
 
     p.inv = (((k.attrs & ATTR_REVERSE) != 0) != flip);
 
