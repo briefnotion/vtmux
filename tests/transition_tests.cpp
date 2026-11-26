@@ -74,7 +74,10 @@ void test_names() {
         CHECK(parse_style(style_name(s), got));
         CHECK(got == s);
     }
+    CHECK_EQ(std::string(style_name(TransitionStyle::Slide)), std::string("slide"));
     TransitionStyle s = TransitionStyle::Dissolve;
+    CHECK(parse_style("Slide", s));
+    CHECK(s == TransitionStyle::Slide);
     CHECK(parse_style("Dip", s));
     CHECK(s == TransitionStyle::Dip);
     CHECK(parse_style("CROSSFADE", s));
@@ -385,7 +388,85 @@ void test_blend_mid_sizes_match_equal_size_result() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- sliding
+
+void test_compose_slide() {
+    const Picture a = make(4, 10, 1, U'a');
+    const Picture b = make(4, 10, 2, U'A');
+    Picture out;
+
+    compose({{&a, 0, 0}}, a, out);                                 // one layer, in place: the picture itself
+    CHECK_EQ(out.rows, 5);
+    CHECK_EQ(out.cols, 10);
+    CHECK(!out.retained);
+    for (int r = 0; r < 5; r++)
+        for (int c = 0; c < 10; c++) CHECK(out.cell[(size_t)r * 10 + c] == a.cell[(size_t)r * 10 + c]);
+
+    // a slid left by 3 with b following it (b's left edge at column 7): a's columns 3..9 land on 0..6, b's columns 0..2 on 7..9
+    compose({{&a, -3, 0}, {&b, 7, 0}}, b, out);
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 7; c++) CHECK(out.cell[(size_t)r * 10 + c] == a.cell[(size_t)r * 10 + c + 3]);
+        for (int c = 7; c < 10; c++) CHECK(out.cell[(size_t)r * 10 + c] == b.cell[(size_t)r * 10 + c - 7]);
+    }
+    for (int c = 0; c < 10; c++) CHECK(out.cell[(size_t)4 * 10 + c] == b.cell[(size_t)4 * 10 + c]);          // the bar row is the bar picture's
+
+    // a later layer is over an earlier one; a drop from the top: b's last two rows over a's first two
+    compose({{&a, 0, 0}, {&b, 0, -2}}, a, out);
+    for (int c = 0; c < 10; c++) {
+        CHECK(out.cell[(size_t)0 * 10 + c] == b.cell[(size_t)2 * 10 + c]);
+        CHECK(out.cell[(size_t)1 * 10 + c] == b.cell[(size_t)3 * 10 + c]);
+        CHECK(out.cell[(size_t)2 * 10 + c] == a.cell[(size_t)2 * 10 + c]);
+    }
+
+    // a layer entirely off the body, or a null one, changes nothing; what no layer covers is blank
+    compose({{&b, 10, 0}, {&b, 0, 4}, {&b, -10, 0}, {nullptr, 0, 0}}, a, out);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 10; c++) CHECK(out.cell[(size_t)r * 10 + c] == PicCell());
+    compose({{&a, 4, 1}}, a, out);                                 // down and right: the top row and the left columns are blank
+    CHECK(out.cell[(size_t)0 * 10 + 5] == PicCell());
+    CHECK(out.cell[(size_t)2 * 10 + 3] == PicCell());
+    CHECK(out.cell[(size_t)2 * 10 + 4] == a.cell[(size_t)1 * 10 + 0]);
+
+    // odd sizes are safe
+    Picture empty;
+    compose({{&a, 0, 0}}, empty, out);
+    CHECK_EQ(out.rows, 0);
+    compose({{&empty, 0, 0}}, a, out);
+    CHECK_EQ(out.rows, 5);
+    const Picture narrow = make(4, 4, 3, U'x');
+    compose({{&a, 0, 0}}, narrow, out);                            // a wider layer than the body is cut
+    CHECK_EQ(out.cols, 4);
+    CHECK(out.cell[(size_t)1 * 4 + 3] == a.cell[(size_t)1 * 10 + 3]);
+}
+
+void test_ease_and_slide_time() {
+    CHECK_EQ(ease_out(0.0), 0.0);
+    CHECK_EQ(ease_out(1.0), 1.0);
+    CHECK_EQ(ease_out(-3.0), 0.0);
+    CHECK_EQ(ease_out(7.0), 1.0);
+    CHECK_EQ(ease_out(std::nan("")), 0.0);
+    double last = 0;
+    for (int i = 1; i <= 100; i++) {                                // rising, and fast at first (ahead of a straight line)
+        const double e = ease_out(i / 100.0);
+        CHECK(e >= last);
+        CHECK(e >= i / 100.0 - 1e-12);
+        last = e;
+    }
+    CHECK_EQ(slide_ms(1, 250), 250.0);                              // one step: the base
+    CHECK(slide_ms(2, 250) > 250 && slide_ms(2, 250) < 500);
+    CHECK_EQ(slide_ms(9, 250), 500.0);                              // capped at twice
+    CHECK_EQ(slide_ms(100, 250), 500.0);
+    CHECK(slide_ms(0.5, 250) < 250 && slide_ms(0.5, 250) >= 75);    // part of a step: shorter
+    CHECK_EQ(slide_ms(0.01, 250), 75.0);                            // but not under 0.3 of it
+    CHECK_EQ(slide_ms(0, 250), 0.0);
+    CHECK_EQ(slide_ms(3, 0), 0.0);
+    double prev = 0;
+    for (double st = 0.05; st < 12; st += 0.05) { const double ms = slide_ms(st, 250); CHECK(ms >= prev); prev = ms; }   // never shorter for a longer way
+}
+
 int main() {
+    test_compose_slide();
+    test_ease_and_slide_time();
     test_names();
     test_ends_exact();
     test_out_is_assigned_and_not_retained();

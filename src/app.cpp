@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 
@@ -98,19 +99,58 @@ bool App::new_window(const std::vector<std::string>& command, const std::string&
     }
     w.session->name = w.name;
     make_pictures(w);
-    windows_.push_back(std::move(w));
-    const bool first = windows_.size() == 1;
-    if (first) active_ = 0;
-    else switch_to((int)windows_.size() - 1, now);
+    if (windows_.empty()) {
+        windows_.push_back(std::move(w));
+        active_ = 0;
+        return true;
+    }
+    // it goes in next to the one shown (on its right) and is shown
+    cancel_transition();
+    const int old_id = windows_[(size_t)active_].id;
+    windows_.insert(windows_.begin() + active_ + 1, std::move(w));
+    active_++;
+    from_id_ = old_id;
+    from_is_copy_ = false;
+    kind_ = options_.style == TransitionStyle::Slide ? Kind::Open : Kind::Blend;
+    duration_ms_ = options_.fade_ms;
+    transition_active_ = options_.fade_ms > 0;
+    transition_start_ = now;
     return true;
+}
+
+// Whatever is in progress ends where it was going.
+void App::cancel_transition() {
+    transition_active_ = false;
+    from_is_copy_ = false;
+}
+
+// Where the view of the row of consoles is now, in consoles (a Strip transition).
+double App::strip_position(double now) const {
+    const double span = std::max(duration_ms_, 1.0);
+    const double t = (now - transition_start_) * 1000.0 / span;
+    return strip_from_ + ((double)active_ - strip_from_) * ease_out(t);
 }
 
 void App::switch_to(int index, double now) {
     if (index < 0 || index >= (int)windows_.size() || index == active_) return;
+    if (options_.style == TransitionStyle::Slide) {
+        // slide along the row of consoles; if a slide is under way the new one starts from where the view is now
+        const double from = (transition_active_ && kind_ == Kind::Strip) ? strip_position(now) : (double)active_;
+        active_ = index;
+        kind_ = Kind::Strip;
+        strip_from_ = from;
+        duration_ms_ = slide_ms(std::fabs((double)index - from), options_.fade_ms);
+        transition_active_ = options_.fade_ms > 0;
+        transition_start_ = now;
+        from_is_copy_ = false;
+        return;
+    }
     // the one on screen now is where the fade starts from (if a fade is under way, this snaps it: the new fade starts from where that one was going)
     from_id_ = windows_[(size_t)active_].id;
     from_is_copy_ = false;
     active_ = index;
+    kind_ = Kind::Blend;
+    duration_ms_ = options_.fade_ms;
     transition_active_ = options_.fade_ms > 0;
     transition_start_ = now;
 }
@@ -122,16 +162,22 @@ void App::close_window(int index, double now, bool hang_up) {
     windows_.erase(windows_.begin() + index);
     if (windows_.empty()) { done_ = true; closing_.emplace_back([s = std::move(gone.session)]() mutable { s.reset(); }); return; }
     if (index < active_) active_--;
+    if (transition_active_ && !was_active) cancel_transition();   // the row of consoles changed under it
     if (was_active) {
         active_ = index > 0 ? index - 1 : 0;                     // the console to its left (or the first)
-        // fade away from the console that closed: its last picture is kept as a copy
+        // the console that closed goes away (a fade, or it drops off the screen): its last picture is kept as a copy
         from_copy_ = gone.pic;
         from_is_copy_ = true;
         from_id_ = 0;
+        if (options_.style == TransitionStyle::Slide) {
+            kind_ = Kind::Close;
+            close_from_right_ = index == 0;                      // the one that takes its place was on the right only if it was the first that closed
+        } else {
+            kind_ = Kind::Blend;
+        }
+        duration_ms_ = options_.fade_ms;
         transition_active_ = options_.fade_ms > 0;
         transition_start_ = now;
-    } else if (transition_active_ && from_id_ == gone.id) {
-        transition_active_ = false;
     }
     (void)hang_up;
     closing_.emplace_back([s = std::move(gone.session)]() mutable { s.reset(); });      // the hang up waits for the program: not on the UI thread
@@ -139,7 +185,7 @@ void App::close_window(int index, double now, bool hang_up) {
 
 void App::settle_transition(double now) {
     if (!transition_active_) return;
-    if ((now - transition_start_) * 1000.0 >= options_.fade_ms) { transition_active_ = false; from_is_copy_ = false; }
+    if ((now - transition_start_) * 1000.0 >= duration_ms_) cancel_transition();
 }
 
 // ------------------------------------------------------------------------------------------------ input
@@ -315,22 +361,28 @@ std::string App::run_command(const std::string& line, double now) {
         return out.str();
     }
     if (cmd == "set") {
-        if (w.size() >= 3 && w[1] == "fade") {
+        if (w.size() >= 3 && (w[1] == "transition" || w[1] == "fade")) {          // (fade is the older name)
             TransitionStyle style;
-            if (!parse_style(w[2], style)) return "fade: crossfade, dissolve or dip";
+            if (!parse_style(w[2], style)) return "transition: slide, dip, dissolve or crossfade";
+            cancel_transition();
             options_.style = style;
-            return "fade: " + w[2];
+            return "transition: " + w[2];
         }
-        if (w.size() >= 3 && w[1] == "fade-ms") {
+        if (w.size() >= 3 && (w[1] == "transition-ms" || w[1] == "fade-ms")) {
             const int ms = std::atoi(w[2].c_str());
-            if (ms < 0 || ms > 5000) return "fade-ms: 0 to 5000";
+            if (ms < 0 || ms > 5000) return "transition-ms: 0 to 5000";
             options_.fade_ms = ms;
-            return "fade-ms: " + std::to_string(ms);
+            return "transition-ms: " + std::to_string(ms);
         }
-        return "set: fade crossfade|dissolve|dip   or   fade-ms N";
+        if (w.size() >= 3 && w[1] == "fps") {
+            if (w[2] != "on" && w[2] != "off") return "fps: on or off";
+            show_fps_ = w[2] == "on";
+            return "fps: " + w[2];
+        }
+        return "set: transition slide|dip|dissolve|crossfade   transition-ms N   fps on|off";
     }
     if (cmd == "quit" || cmd == "q" || cmd == "exit") { done_ = true; return ""; }
-    if (cmd == "help") return "new [name] [-- cmd]  close  next  prev  goto N  rename N  list  set fade|fade-ms  quit";
+    if (cmd == "help") return "new [name] [-- cmd]  close  next  prev  goto N  rename N  list  set transition|transition-ms|fps  quit";
     return "unknown command: " + cmd + "  (help)";
 }
 
@@ -367,6 +419,7 @@ void App::draw_bar(vtscreen::Picture& pic, double now) {
     else if (mode_ == Mode::Command) right = "COMMAND  \xE2\x86\x90 \xE2\x86\x92 switch  \xE2\x86\x91 history  : command  1-9 go  Esc back";
     else if (!message_.empty() && now < message_until_) right = message_;
     else right = "vtmux  ^B for commands";
+    if (show_fps_) right = std::to_string((int)std::lround(fps_)) + " fps  " + right;
     const int room = width - col - 1;
     if (room > 4) {
         const std::string cut = utf8_cut(right, (size_t)room);
@@ -377,12 +430,48 @@ void App::draw_bar(vtscreen::Picture& pic, double now) {
 
 const vtscreen::Picture& App::frame(double now) {
     if (windows_.empty()) return mixed_;
+
+    // the frame rate, measured over about half a second
+    if (fps_since_ < 0 || now < fps_since_) { fps_since_ = now; fps_frames_ = 0; }
+    fps_frames_++;
+    if (now - fps_since_ >= 0.5) { fps_ = fps_frames_ / (now - fps_since_); fps_since_ = now; fps_frames_ = 0; }
+
     Window& act = windows_[(size_t)active_];
-    act.session->publish(act.pic, true, options_.theme);
+    const bool moving = transition_active_ && kind_ != Kind::Blend;        // (while things slide, no cursor is drawn)
+    act.session->publish(act.pic, !moving, options_.theme);
     draw_bar(act.pic, now);
     if (!transition_active_) return act.pic;
 
-    const double pct = std::min(1.0, std::max(0.0, (now - transition_start_) * 1000.0 / std::max(options_.fade_ms, 1)));
+    const double pct = std::min(1.0, std::max(0.0, (now - transition_start_) * 1000.0 / std::max(duration_ms_, 1.0)));
+
+    if (kind_ == Kind::Strip) {
+        const double p = strip_position(now);
+        const int lo = std::max(0, (int)std::floor(p)), hi = std::min((int)windows_.size() - 1, (int)std::ceil(p));
+        std::vector<Layer> layers;
+        for (int i = lo; i <= hi; i++) {
+            Window& w = windows_[(size_t)i];
+            if (i != active_) w.session->publish(w.pic, false, options_.theme);
+            layers.push_back({&w.pic, (int)std::lround(((double)i - p) * act.pic.cols), 0});
+        }
+        compose(layers, act.pic, mixed_);
+        return mixed_;
+    }
+    const int body = act.pic.rows - 1;
+    const double e = ease_out(pct);
+    if (kind_ == Kind::Open) {                       // the new console drops in over the old one, which slides off to the left
+        Window* old = find(from_id_);
+        if (old) {
+            old->session->publish(old->pic, false, options_.theme);
+            compose({{&old->pic, -(int)std::lround(e * act.pic.cols), 0}, {&act.pic, 0, -(int)std::lround((1.0 - e) * body)}}, act.pic, mixed_);
+            return mixed_;
+        }
+        return act.pic;
+    }
+    if (kind_ == Kind::Close) {                      // the console that closed drops off the bottom, the one that replaces it slides in
+        const int side = close_from_right_ ? 1 : -1;
+        compose({{&act.pic, side * (int)std::lround((1.0 - e) * act.pic.cols), 0}, {&from_copy_, 0, (int)std::lround(e * body)}}, act.pic, mixed_);
+        return mixed_;
+    }
     const vtscreen::Picture* from = nullptr;
     if (from_is_copy_) from = &from_copy_;
     else if (Window* f = find(from_id_)) {
@@ -397,8 +486,7 @@ const vtscreen::Picture& App::frame(double now) {
 void App::resize(int rows, int cols) {
     rows_ = std::max(rows, 2);
     cols_ = std::max(cols, 1);
-    transition_active_ = false;
-    from_is_copy_ = false;
+    cancel_transition();
     for (Window& w : windows_) {
         w.session->resize(rows_ - 1, cols_);
         make_pictures(w);

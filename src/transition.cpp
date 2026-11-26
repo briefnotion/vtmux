@@ -12,6 +12,7 @@ const char* style_name(TransitionStyle style) {
         case TransitionStyle::Crossfade: return "crossfade";
         case TransitionStyle::Dissolve: return "dissolve";
         case TransitionStyle::Dip: return "dip";
+        case TransitionStyle::Slide: return "slide";
     }
     return "crossfade";
 }
@@ -22,6 +23,7 @@ bool parse_style(const std::string& name, TransitionStyle& style) {
     if (n == "crossfade") { style = TransitionStyle::Crossfade; return true; }
     if (n == "dissolve") { style = TransitionStyle::Dissolve; return true; }
     if (n == "dip") { style = TransitionStyle::Dip; return true; }
+    if (n == "slide") { style = TransitionStyle::Slide; return true; }
     return false;
 }
 
@@ -89,7 +91,7 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
             const Picture& s = pct <= 0 ? a : b;
             for (int r = 0; r < body; r++)
                 for (int c = 0; c < cc; c++) out.cell[(size_t)r * ocols + c] = s.cell[(size_t)r * s.cols + c];
-        } else if (style == TransitionStyle::Crossfade) {
+        } else if (style == TransitionStyle::Crossfade || style == TransitionStyle::Slide) {
             if (same_size) {
                 vtscreen::fade(a, b, pct, out);
                 out.retained = false;
@@ -119,6 +121,43 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
     // the bar's row is b's, whatever the style
     for (int c = 0; c < cc; c++)
         out.cell[(size_t)(orows - 1) * ocols + c] = b.cell[(size_t)(b.rows - 1) * b.cols + c];
+}
+
+void compose(const std::vector<Layer>& layers, const Picture& bar, Picture& out) {
+    const int orows = std::max(0, bar.rows), ocols = std::max(0, bar.cols);
+    out.retained = false;
+    out.rows = orows; out.cols = ocols;
+    out.cell.assign((size_t)orows * ocols, PicCell());
+    out.touch_all();
+    if (orows == 0 || ocols == 0) return;
+    const int body = orows - 1;
+    for (const Layer& l : layers) {
+        if (l.pic == nullptr || !usable(*l.pic)) continue;
+        const int lrows = l.pic->rows - 1;                          // its body
+        for (int r = 0; r < lrows; r++) {
+            const int row = r + l.dy;
+            if (row < 0 || row >= body) continue;
+            // the columns of this row that land on the body
+            const int from = std::max(0, -l.dx), to = std::min(l.pic->cols, ocols - l.dx);
+            for (int c = from; c < to; c++)
+                out.cell[(size_t)row * ocols + (size_t)(c + l.dx)] = l.pic->cell[(size_t)r * l.pic->cols + c];
+        }
+    }
+    if (usable(bar))
+        for (int c = 0; c < ocols; c++) out.cell[(size_t)body * ocols + c] = bar.cell[(size_t)body * bar.cols + c];
+}
+
+double ease_out(double t) {
+    if (!(t > 0)) return 0.0;                                       // also catches NaN
+    if (t >= 1) return 1.0;
+    const double u = 1.0 - t;
+    return 1.0 - u * u * u;
+}
+
+double slide_ms(double steps, double base_ms) {
+    if (!(steps > 0) || !(base_ms > 0)) return 0.0;
+    const double factor = steps <= 1.0 ? std::max(0.3, steps) : std::min(2.0, 1.0 + 0.25 * (steps - 1.0));
+    return base_ms * factor;
 }
 
 }  // namespace vtmux

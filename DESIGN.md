@@ -1,6 +1,6 @@
 # vtmux: design
 
-A terminal multiplexer with fades. You run `vtmux` in a console and see what looks like the same console, with one
+A terminal multiplexer with sliding and fading transitions. You run `vtmux` in a console and see what looks like the same console, with one
 extra row at the bottom: the control bar. Everything works as it did. Press `Ctrl-B` and the bar changes colour: you are in
 *command mode*. There you make and close consoles by typing commands after a colon, or flip between consoles with the left
 and right arrow keys, and the screens cross-fade into each other (as in vtshow), real terminal screens fading.
@@ -19,7 +19,7 @@ Command mode keys:
 
 | key | does |
 |---|---|
-| `Left`, `Right` | the previous, the next console, with a fade (wraps round) |
+| `Left`, `Right` | the previous, the next console, with the transition (wraps round: from the last, Right slides all the way back to the first) |
 | `1` ... `9` | that console |
 | `:` | type a command; Enter runs it, Esc gives up, Backspace edits |
 | `Esc`, `Enter` | back to normal mode |
@@ -31,10 +31,10 @@ Commands (after `:`):
 |---|---|
 | `new [name] [-- command ...]` | a new console running the shell (or the command), and go to it |
 | `close`, `kill` | close this console (its program gets SIGHUP); the last one closing ends vtmux |
-| `next`, `prev`, `goto N` | switch, with the fade |
+| `next`, `prev`, `goto N` | switch, with the transition |
 | `rename NAME` | name this console |
 | `list` | show the consoles on the bar for a moment |
-| `set fade crossfade\|dissolve\|dip`, `set fade-ms N` | how, and how long, the switch fades |
+| `set transition slide\|dip\|dissolve\|crossfade`, `set transition-ms N`, `set fps on\|off` | how, and how long, the switch looks; the frame rate on the bar |
 | `quit` | close everything and leave |
 | `help` | the keys and commands on the bar |
 
@@ -56,7 +56,7 @@ A console that ends by itself (the shell exits) closes. Closing the last one lea
 | emulator | `src/emulator.*`, `src/width.*` | the terminal in memory: cells, cursor, scrollback, alt screen, modes, replies | done, being completed (VT52, VT102 extras) |
 | keys | `src/keys.*` | raw input bytes to key events (arrows, F keys, Escape, paste) for command mode | done, tested |
 | painter | `src/render.*` | emulator dirty rows to a retained vtscreen Picture (colours, bold, reverse, cursor) | done, tested |
-| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark (dip is the default: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy) | done, tested |
+| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark; and `compose`, which places screens on a surface for the slide (a row of consoles; a drop in from the top; a drop off the bottom). Slide is the default; (dip: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy) | done, tested |
 | session | `src/session.*` | forkpty, the reader thread, the lock, resize, exit (closes every inherited descriptor in the child) | done, tested |
 | app | `src/app.*` | the modes, the command line, the window list, the bar, the transition in progress | done, tested |
 | main | `src/main.cpp` | options, the loop, the terminal modes (resets the frame schedule every frame, so a burst of keys cannot push later frames away) | done, e2e tested |
@@ -64,7 +64,7 @@ A console that ends by itself (the shell exits) closes. Closing the last one lea
 
 ## Threads
 
-- The UI thread runs the frame loop (30 fps): keys, then for the shown console(s) `Session::publish` (copy what changed into
+- The UI thread runs the frame loop (60 fps at most, the clock drives the animation): keys, then for the shown console(s) `Session::publish` (copy what changed into
   the console's Picture), the transition, the bar, `Display::show`.
 - Each Session has one reader thread: `read(pty)`, then under the session lock `Emulator::feed`, then the replies are written back
   to the pty (outside the lock).

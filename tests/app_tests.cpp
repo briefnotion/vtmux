@@ -43,6 +43,13 @@ bool pump(App& app, const std::function<bool()>& pred, int ms = 4000) {
     return pred();
 }
 
+// the text of the screen without the bar's row (the last)
+std::string body_text(const vtscreen::Picture& pic) {
+    std::string out;
+    for (int r = 0; r < pic.rows - 1; r++) out += row_text(pic, r) + "\n";
+    return out;
+}
+
 bool shows(App& app, const std::string& what) {
     app.tick(g_now);
     return !app.done() && screen_text(app.frame(g_now)).find(what) != std::string::npos;
@@ -60,6 +67,7 @@ void type(App& app, const std::string& bytes) { app.handle_input(bytes.data(), b
 AppOptions options() {
     AppOptions o;
     o.first_command = {"sh"};
+    o.style = TransitionStyle::Dip;                          // (the tests of the fade; the slide has its own below)
     o.fade_ms = 200;
     return o;
 }
@@ -70,6 +78,156 @@ std::string bar(App& app) { return row_text(app.frame(g_now), 9); }        // th
 
 int main() {
     std::string error;
+
+    // ---- the slide (the default): the consoles are side by side in a row and the view slides along it
+    {
+        CHECK(AppOptions().style == TransitionStyle::Slide);
+        AppOptions o = options();
+        o.style = TransitionStyle::Slide;
+        o.first_command = {"sh", "-c", "printf '%060d' 0 | tr 0 A; sleep 30"};           // a first row of A, of B, of C ... one for each console
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(expect_shows(app, std::string(60, 'A')));
+        CHECK(app.run_command("new b -- sh -c \"printf '%060d' 0 | tr 0 B; sleep 30\"", g_now).empty());
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'B')));
+        CHECK(app.run_command("new c -- sh -c \"printf '%060d' 0 | tr 0 C; sleep 30\"", g_now).empty());
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'C')));
+        CHECK_EQ(app.window_count(), 3);
+        CHECK_EQ(app.active_index(), 2);
+
+        // 3 to 1: the screens slide right, the one between going past: A, B and C all show at some time, and often two at once
+        const double t0 = g_now;
+        CHECK(app.run_command("goto 1", t0).empty());
+        CHECK_EQ(app.active_index(), 0);
+        CHECK(app.transitioning());
+        bool saw_a = false, saw_b = false, saw_c = false, two_at_once = false, bar_still = true;
+        int mixed_rows_wrong = 0;
+        for (int k = 0; k <= 60; k++) {
+            const vtscreen::Picture& pic = app.frame(t0 + k * 0.01);
+            const std::string row = row_text(pic, 0);
+            const bool a = row.find('A') != std::string::npos, b = row.find('B') != std::string::npos, c = row.find('C') != std::string::npos;
+            saw_a |= a; saw_b |= b; saw_c |= c;
+            if ((a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0) >= 2) two_at_once = true;
+            if (row_text(pic, 9).find("1:") == std::string::npos) bar_still = false;                // the bar does not slide
+            if (row.size() < 60) mixed_rows_wrong++;
+        }
+        CHECK(saw_a && saw_b && saw_c);
+        CHECK(two_at_once);
+        CHECK(bar_still);
+        CHECK_EQ(mixed_rows_wrong, 0);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'A')));
+        CHECK(body_text(app.frame(g_now)).find('B') == std::string::npos);
+
+        // from the last back to the first it goes all the way back through the others, it does not wrap round
+        app.run_command("goto 3", g_now);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        const double t2 = g_now;
+        type(app, "\x02\x1b[C");                                                  // Right from the last: the first
+        CHECK_EQ(app.active_index(), 0);
+        bool saw_b_between = false;
+        for (int k = 0; k <= 60; k++)
+            if (row_text(app.frame(t2 + k * 0.01), 0).find('B') != std::string::npos) saw_b_between = true;
+        CHECK(saw_b_between);                                                      // the second console went by
+        type(app, "\x1b");
+
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+    }
+
+    {   // a key while sliding starts again from where the view is, not from the end
+        AppOptions o = options();
+        o.style = TransitionStyle::Slide;
+        o.first_command = {"sh", "-c", "printf '%060d' 0 | tr 0 A; sleep 30"};
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(expect_shows(app, std::string(60, 'A')));
+        app.run_command("new b -- sh -c \"printf '%060d' 0 | tr 0 B; sleep 30\"", g_now);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'B')));
+        const double t0 = g_now;
+        app.run_command("goto 1", t0);                                             // B to A
+        const std::string halfway = row_text(app.frame(t0 + 0.08), 0);              // part of the way
+        const size_t b_at = halfway.find('B');
+        CHECK(b_at != std::string::npos && b_at > 5 && halfway.find('A') != std::string::npos);
+        app.run_command("goto 2", t0 + 0.08);                                      // and back to B before it got there
+        CHECK_EQ(app.active_index(), 1);
+        const std::string again = row_text(app.frame(t0 + 0.0801), 0);             // the view has not jumped: nearly the same picture
+        const size_t b_again = again.find('B');
+        CHECK(b_again != std::string::npos);
+        CHECK(b_again + 3 >= b_at && b_again <= b_at + 3);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'B')));
+    }
+
+    {   // a new console goes in next to this one, drops in from the top while this one slides off; no cursor until it has landed
+        AppOptions o = options();
+        o.style = TransitionStyle::Slide;
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        app.run_command("new b", g_now);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        app.run_command("new c", g_now);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK_EQ(app.window_count(), 3);
+        CHECK(app.run_command("goto 1", g_now).empty());
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        app.run_command("rename first", g_now);
+        const double t0 = g_now;
+        app.run_command("new inserted", t0);
+        CHECK_EQ(app.window_count(), 4);
+        CHECK_EQ(app.active_index(), 1);                                           // next to the first, not at the end
+        CHECK_EQ(app.window_name(1), std::string("inserted"));
+        CHECK_EQ(app.window_name(0), std::string("first"));
+        CHECK(app.transitioning());
+        (void)app.frame(t0 + 0.05);                                                // in the middle of it: it draws without trouble
+        (void)app.frame(t0 + 0.15);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+    }
+
+    {   // closing: the console drops off the bottom, the one to its left slides in; closing the first brings the next in from the right
+        AppOptions o = options();
+        o.style = TransitionStyle::Slide;
+        o.first_command = {"sh", "-c", "printf '%060d' 0 | tr 0 A; sleep 30"};
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(expect_shows(app, std::string(60, 'A')));
+        app.run_command("new b -- sh -c \"printf '%060d' 0 | tr 0 B; sleep 30\"", g_now);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'B')));
+        const double t0 = g_now;
+        app.run_command("close", t0);                                              // B closes: A takes its place, from the left
+        CHECK_EQ(app.window_count(), 1);
+        CHECK(app.transitioning());
+        const std::string early = body_text(app.frame(t0 + 0.02));
+        CHECK(early.find('B') != std::string::npos);                               // B is still going (on top, dropping)
+        // B has dropped part of the way: the top rows show A (coming in) and the bottom rows B
+        bool a_above_b = false;
+        for (int k = 3; k <= 12; k++) {
+            const vtscreen::Picture& pic = app.frame(t0 + k * 0.01);
+            for (int r = 0; r < 9; r++) {
+                const std::string row = row_text(pic, r);
+                if (row.find('A') != std::string::npos && row.find('B') == std::string::npos) { a_above_b = true; break; }
+            }
+        }
+        CHECK(a_above_b);
+        CHECK(pump(app, [&] { return !app.transitioning(); }));
+        CHECK(expect_shows(app, std::string(60, 'A')));
+        CHECK(body_text(app.frame(g_now)).find('B') == std::string::npos);
+    }
+
+    {   // the frame rate counter: off by default; on, it is on the bar
+        App app(10, 60, options());
+        CHECK(app.start(error));
+        CHECK(!app.show_fps());
+        for (int k = 0; k < 100; k++) app.frame(k * 0.016);
+        CHECK(row_text(app.frame(1.7), 9).find("fps") == std::string::npos);
+        app.run_command("set fps on", 1.7);
+        for (int k = 0; k < 100; k++) app.frame(2.0 + k * 0.01);                    // 100 frames a second
+        CHECK(row_text(app.frame(3.01), 9).find("fps") != std::string::npos);
+        CHECK(app.fps() > 80 && app.fps() < 120);
+    }
 
     // ---- the history: arrows and pages in command mode scroll back, Escape or typing comes back live
     {
@@ -184,7 +342,7 @@ int main() {
     {   // fade-ms 0: no fade at all
         App app(10, 60, options());
         CHECK(app.start(error));
-        CHECK(app.run_command("set fade-ms 0", g_now) == "fade-ms: 0");
+        CHECK(app.run_command("set fade-ms 0", g_now) == "transition-ms: 0");
         CHECK(app.run_command("new b", g_now).empty());
         CHECK(!app.transitioning());
     }
@@ -243,9 +401,17 @@ int main() {
         CHECK(app.run_command("new x y", g_now).find("new: use") == 0);
         CHECK(app.run_command("new x --", g_now).find("new: nothing after") == 0);
         CHECK(app.run_command("new bad -- /nonexistent/prog", g_now).empty());      // it starts, then ends with an error message of its own
-        CHECK(app.run_command("set fade dissolve", g_now) == "fade: dissolve");
-        CHECK(app.run_command("set fade nonsense", g_now).find("fade:") == 0);
-        CHECK(app.run_command("set fade-ms 9999", g_now).find("0 to 5000") != std::string::npos);
+        CHECK(app.run_command("set fade dissolve", g_now) == "transition: dissolve");          // (fade is the older name)
+        CHECK(app.run_command("set transition dip", g_now) == "transition: dip");
+        CHECK(app.run_command("set transition slide", g_now) == "transition: slide");
+        CHECK(app.run_command("set transition nonsense", g_now).find("transition:") == 0);
+        CHECK(app.run_command("set transition-ms 9999", g_now).find("0 to 5000") != std::string::npos);
+        CHECK(app.run_command("set fps on", g_now) == "fps: on");
+        CHECK(app.show_fps());
+        CHECK(app.run_command("set fps off", g_now) == "fps: off");
+        CHECK(!app.show_fps());
+        CHECK(app.run_command("set fps maybe", g_now).find("fps:") == 0);
+        CHECK(app.run_command("set transition-ms 250", g_now) == "transition-ms: 250");
         CHECK(app.run_command("help", g_now).find("new") == 0);
         CHECK(app.run_command("", g_now).empty());
         CHECK(app.run_command("   ", g_now).empty());

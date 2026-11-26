@@ -1,6 +1,6 @@
 // vtmux: a terminal multiplexer with fades. See DESIGN.md.
 //
-//   vtmux [--fade crossfade|dissolve|dip] [--fade-ms N] [--no-color] [--fps N] [-- command args ...]
+//   vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
 //
 // With no command the first console runs your shell. Ctrl-B starts command mode (the bar changes colour): the arrow keys switch
 // consoles, a colon starts a command (new, close, goto, rename, list, set, quit, help), Esc goes back.
@@ -21,9 +21,9 @@ using namespace vtmux;
 namespace {
 
 void usage() {
-    std::printf("vtmux [--fade crossfade|dissolve|dip] [--fade-ms N] [--no-color] [--fps N] [-- command args ...]\n"
+    std::printf("vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]\n"
                 "  Ctrl-B     command mode: arrows switch consoles, a colon starts a command, Esc goes back\n"
-                "  commands   new [name] [-- command], close, next, prev, goto N, rename NAME, list, set fade|fade-ms, quit, help\n");
+                "  commands   new [name] [-- command], close, next, prev, goto N, rename NAME, list, set transition|transition-ms|fps, quit, help\n");
 }
 
 // Put the terminal in the modes the console on screen wants (application cursor keys, bracketed paste, the mouse ...), so that the keys it
@@ -76,15 +76,16 @@ constexpr int MIN_COLS = 20, MIN_ROWS = 4;
 int run(int argc, char** argv, std::string& message) {
     AppOptions options;
     vtscreen::Options screen;
+    screen.fps = 60;                                       // the most frames a second (--fps changes it)
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         if (a == "--") { for (int k = i + 1; k < argc; k++) options.first_command.push_back(argv[k]); break; }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (a == "--no-color") { screen.color = false; options.theme.color = false; }
         else if (a == "--fps" && i + 1 < argc) screen.fps = std::min(std::max(std::atoi(argv[++i]), 1), 240);
-        else if (a == "--fade-ms" && i + 1 < argc) options.fade_ms = std::min(std::max(std::atoi(argv[++i]), 0), 5000);
-        else if (a == "--fade" && i + 1 < argc) {
-            if (!parse_style(argv[++i], options.style)) { message = "--fade: crossfade, dissolve or dip"; return 2; }
+        else if ((a == "--fade-ms" || a == "--transition-ms") && i + 1 < argc) options.fade_ms = std::min(std::max(std::atoi(argv[++i]), 0), 5000);
+        else if ((a == "--fade" || a == "--transition") && i + 1 < argc) {
+            if (!parse_style(argv[++i], options.style)) { message = a + ": slide, dip, dissolve or crossfade"; return 2; }
         } else { usage(); return 2; }
     }
 

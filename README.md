@@ -1,9 +1,9 @@
 # vtmux
 
-A terminal multiplexer with fades. Run `vtmux` in a console and you get what looks like the same console, with one extra row at the
+A terminal multiplexer with sliding and fading transitions. Run `vtmux` in a console and you get what looks like the same console, with one extra row at the
 bottom: the control bar. Everything works as it did. Press `Ctrl-B` and the bar changes colour: you are in command mode, where you can
 make and close consoles by typing a command after a colon, or flip between consoles with the left and right arrow keys, and the
-screens fade into each other.
+screens slide (or fade) into each other.
 
 ![vtmux](docs/demo_sheet.png)
 
@@ -25,7 +25,7 @@ Linux, `g++` with C++17, `cmake` 3.16 or later, `git`:
 
 If `vtscreen/` is empty, run `git submodule update --init`. `-DVTMUX_TESTS=OFF` skips building the tests.
 
-    vtmux [--fade crossfade|dissolve|dip] [--fade-ms N] [--no-color] [--fps N] [-- command args ...]
+    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
 
 With no command the first console runs your shell (`$SHELL`). Programs inside run with `TERM=xterm-256color`.
 
@@ -35,7 +35,7 @@ In normal mode every key goes to the program in the console, untouched (Ctrl-C a
 
 | in command mode (after `Ctrl-B`) | does |
 |---|---|
-| `Left`, `Right` | the previous, the next console, with a fade; it stays in command mode so you can keep flipping |
+| `Left`, `Right` | the previous, the next console, with the transition (a slide along the row of consoles; from the last, `Right` slides all the way back to the first); it stays in command mode so you can keep flipping |
 | `1` to `9` | that console, and back to normal mode |
 | `c`, `n`, `p` | a new console, the next, the previous (as in tmux) |
 | `Up`, `Down`, `PageUp`, `PageDown`, `Home` | look back through the console's history (2000 lines); the bar shows how far back. `End` returns to the live screen |
@@ -43,17 +43,26 @@ In normal mode every key goes to the program in the console, untouched (Ctrl-C a
 | `Esc`, `Enter` | back to normal mode (and to the live screen). Typing into the console does the same |
 | `Ctrl-B` | send a real Ctrl-B to the program, and back to normal mode |
 
+## Sliding
+
+The consoles sit side by side in a row, in the order on the bar. Switching slides the view along the row, so both screens show part of the way
+and a jump over several consoles shows the ones between going past. A key pressed while a slide is moving starts the next one from where the
+view is now. A new console (`new`) goes in next to the one shown, on its right, and drops in from the top while the old one slides off to the
+left. A closed console drops off the bottom while the one to its left (or the next, if it was the first) slides in. The bar stays still, and the
+cursor is drawn once a console has landed. Everything is timed by the clock, so a slow terminal skips frames and the slide takes as long.
+
 ## Commands (after the colon)
 
 | command | does |
 |---|---|
 | `new [name] [-- command ...]` | a new console running your shell (or the command), and go to it. `new "my name"` keeps spaces |
 | `close`, `kill` | close this console (its program gets a hangup); closing the last one leaves vtmux |
-| `next`, `prev`, `goto N` | switch, with the fade |
+| `next`, `prev`, `goto N` | switch, with the transition |
 | `rename NAME` | name this console on the bar |
 | `list` | show the consoles on the bar for a moment |
-| `set fade crossfade\|dissolve\|dip` | how the switch fades: `dip` (the default) fades the old screen to dark and the new one up; `dissolve` changes cell by cell; `crossfade` mixes the colours as vtshow does |
-| `set fade-ms N` | how long it takes, 0 to 5000 (default 250; 0 switches at once) |
+| `set transition slide\|dip\|dissolve\|crossfade` | how the switch looks: `slide` (the default) slides the screens along side by side, passing the ones between; `dip` fades the old screen to dark and the new one up; `dissolve` changes cell by cell; `crossfade` mixes the colours as vtshow does. (`set fade` still works) |
+| `set transition-ms N` | how long one step takes, 0 to 5000 (default 250; 0 switches at once). A slide over several consoles takes a little longer, up to twice as long |
+| `set fps on\|off` | show the measured frame rate on the bar (off by default). `--fps N` sets the most frames a second (default 60) |
 | `quit` | close everything and leave |
 | `help` | the commands on the bar |
 

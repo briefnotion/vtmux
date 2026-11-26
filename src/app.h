@@ -24,8 +24,8 @@ enum class Mode {
 
 struct AppOptions {
     std::vector<std::string> first_command;      // what the first console runs (empty: the shell)
-    TransitionStyle style = TransitionStyle::Dip;
-    int fade_ms = 250;
+    TransitionStyle style = TransitionStyle::Slide;
+    int fade_ms = 250;                           // what one step of a transition takes (the fade, or one console's slide)
     Theme theme;
     char prefix = 0x02;                          // Ctrl-B
 };
@@ -54,6 +54,8 @@ public:
     int active_index() const { return active_; }
     std::string window_name(int index) const;
     bool transitioning() const { return transition_active_; }
+    bool show_fps() const { return show_fps_; }
+    double fps() const { return fps_; }                           // frames a second, measured
     const std::string& command_line() const { return line_; }
     const std::string& message() const { return message_; }
     // The input modes of the shown console: the real terminal is put in them.
@@ -84,6 +86,8 @@ private:
     void set_mode(Mode mode);
     void make_pictures(Window& w);
     Window* find(int id);
+    double strip_position(double now) const;
+    void cancel_transition();
 
     int rows_, cols_;
     AppOptions options_;
@@ -98,13 +102,28 @@ private:
     std::string message_;
     double message_until_ = 0;
 
-    // the fade in progress: from the console `from_id_` (or from a copy of its picture if it has closed) to the active one
+    // What the transition in progress is:
+    //   Blend: a fade (crossfade, dissolve, dip) from the console `from_id_` (or from a copy of its picture) to the active one
+    //   Strip: the consoles are side by side in a row, in order, and the view slides along it from `strip_from_` (a position in consoles,
+    //          not a whole number if a slide was started again part of the way) to the active one
+    //   Open:  a new console drops in from the top, and the one it came from (`from_id_`) slides off to the left
+    //   Close: the console that closed (its copy) drops off the bottom, and the one that takes its place slides in from `close_from_right_`'s side
+    enum class Kind { Blend, Strip, Open, Close };
+    Kind kind_ = Kind::Blend;
+    double strip_from_ = 0;
+    bool close_from_right_ = false;
+    double duration_ms_ = 0;
     bool transition_active_ = false;
     int from_id_ = 0;
     vtscreen::Picture from_copy_;
     bool from_is_copy_ = false;
     double transition_start_ = 0;
     vtscreen::Picture mixed_;
+
+    bool show_fps_ = false;                      // the frame rate on the bar (set fps on)
+    double fps_ = 0;
+    int fps_frames_ = 0;
+    double fps_since_ = -1;
 
     std::vector<std::thread> closing_;           // consoles being hung up, in the background
 };
