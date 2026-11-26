@@ -105,6 +105,9 @@ paste, mouse, focus) and takes it out of them again on the way out.
 - `tests/conformance/run.sh` feeds thousands of generated escape-sequence streams, hand-written screens and real program captures to the
   emulator (`tools/vtdump.cpp`), tmux and pyte, and compares the screens. `tests/vt100_tests.cpp`, `vt102_tests.cpp` and `vt52_tests.cpp` pin
   the DEC terminals' behaviour. What it found is in `tests/conformance/FINDINGS.md`.
+- To try the real `vttest` program (`sudo apt install vttest`) run it inside vtmux in a window of 80 columns (24 rows, plus the bar's). It
+  draws for an 80 or 132 column screen: in a wider window the borders of its first screen come out broken, in tmux too. vtmux does not do
+  the 132 column mode (the screen clears but keeps its width), as most terminal programs do not.
 - `tools/demo.py` makes the screenshots above; `tools/preview_transition.py` renders the three fades.
 
 ## Licence
