@@ -62,6 +62,9 @@ public:
 
     InputModes modes();
     std::string title();
+    // Clipboard writes (OSC 52) the program made since last asked, as sequences for the real terminal. has_clipboard() is a cheap look.
+    bool has_clipboard() const { return clip_flag_.load(); }
+    std::vector<std::string> take_clipboard();
     int rows();
     int cols();
 
@@ -88,6 +91,7 @@ private:
     std::thread thread_;
     std::atomic<bool> stopping_{false};
     std::atomic<bool> exited_{false};
+    std::atomic<bool> clip_flag_{false};
     std::atomic<int> exit_status_{0};
 
     std::mutex mutex_;                           // guards the emulator and the painter

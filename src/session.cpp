@@ -126,6 +126,7 @@ void Session::reader() {
                 emulator_.feed(buf, (size_t)got);
                 reply = emulator_.take_reply();
                 if (emulator_.cols() != told_cols_ || emulator_.rows() != told_rows_) tell_size();      // the program switched to 80 or 132 columns
+                if (emulator_.has_clipboard()) clip_flag_ = true;
             }
             if (!reply.empty()) write_fully(master_, reply.data(), reply.size());
         }
@@ -230,6 +231,12 @@ InputModes Session::modes() {
     m.mouse_tracking = emulator_.mouse_tracking();
     m.mouse_sgr = emulator_.mouse_sgr();
     return m;
+}
+
+std::vector<std::string> Session::take_clipboard() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    clip_flag_ = false;
+    return emulator_.take_clipboard();
 }
 
 std::string Session::title() {

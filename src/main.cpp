@@ -123,6 +123,7 @@ int run(int argc, char** argv, std::string& message) {
                 if (!typed.empty()) app.handle_input(typed.data(), typed.size(), now);
                 app.tick(now);
                 if (app.done()) break;
+                { const std::string term_out = app.take_terminal_output(); if (!term_out.empty()) vtscreen::write_all(term_out); }      // clipboard writes
 
                 terminal_modes.apply(app.input_modes());
                 const std::string title = "vtmux: " + app.title();

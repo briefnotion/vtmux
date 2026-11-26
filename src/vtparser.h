@@ -56,6 +56,7 @@ public:
 
     // How long a string (OSC) may be before the rest is dropped.
     static constexpr size_t MAX_STRING = 4096;
+    static constexpr size_t MAX_CLIPBOARD_STRING = 1 << 20;     // the limit for an OSC 52 (clipboard) string: 1 MiB
     static constexpr size_t MAX_PARAMS = 32;
 
 private:

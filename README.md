@@ -58,6 +58,18 @@ and a jump over several consoles shows the ones between going past. A key presse
 view is now. A new console (`new`) goes in next to the one shown, on its right, in two steps: first the old one slides off to the left, leaving empty space (the void, a dark blue by default), then the new one drops in from the top. Closing is two steps too: the closed console drops off the bottom, then the one to its left (or the next, if it was the first) slides in. Both together take one and a half times what one step does. The bar stays still, and the
 cursor is drawn once a console has landed. Everything is timed by the clock, so a slow terminal skips frames and the slide takes as long.
 
+## Copy and paste
+
+- In an ordinary console (a listing, a shell) select with the mouse as you always do: your terminal program does that, and vtmux is not in the way.
+- A program that uses the mouse itself (micro, btop, vim with `mouse=a`) gets the mouse events instead, so dragging selects inside the program.
+  To select with your terminal program's own selection, hold `Shift` while dragging (Windows Terminal, most Linux terminals).
+- A program that copies by itself (micro with `"clipboard": "terminal"` in its settings, vim and tmux-style plugins, `printf` from a script)
+  sends the text to the terminal in an escape sequence (OSC 52), and your terminal program puts it in the clipboard. vtmux passes these on from
+  the console that is shown, so Ctrl-C in micro works as it does without vtmux. A console in the background does not get to set your
+  clipboard. Only writes are passed: a program cannot read your clipboard through vtmux. `:set clipboard off` stops all of it (on by default).
+  Your terminal program may have its own switch for this too.
+- Paste goes through as a paste (bracketed, if the program asked for that).
+
 ## Commands (after the colon)
 
 | command | does |
@@ -70,6 +82,7 @@ cursor is drawn once a console has landed. Everything is timed by the clock, so 
 | `set transition slide\|dip\|dissolve\|crossfade` | how the switch looks: `slide` (the default) slides the screens along side by side, passing the ones between; `dip` fades the old screen to dark and the new one up; `dissolve` changes cell by cell; `crossfade` mixes the colours as vtshow does. (`set fade` still works) |
 | `set transition-ms N` | how long one step takes, 0 to 5000 (default 1000; 0 switches at once). A slide over several consoles takes a little longer, up to twice as long |
 | `set void-color RRGGBB\|off` | the colour of the empty space while a console is opening or closing (default `101220`; `off` leaves it the terminal's own background) |
+| `set clipboard on\|off` | whether programs may set your clipboard (OSC 52, see Copy and paste; default on) |
 | `set fps on\|off` | show the measured frame rate on the bar (off by default). `--fps N` sets the most frames a second (default 60) |
 | `quit` | close everything and leave |
 | `help` | a card over the middle of the screen (about two thirds of it) with all the keys and commands. The console keeps running round it. `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End` scroll it when the screen is too small to show it all; `Enter`, `Space`, `Esc` or `q` closes it |

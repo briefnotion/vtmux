@@ -398,12 +398,17 @@ std::string App::run_command(const std::string& line, double now) {
             options_.void_on = true;
             return "void-color: #" + hex;
         }
+        if (w.size() >= 3 && w[1] == "clipboard") {
+            if (w[2] != "on" && w[2] != "off") return "clipboard: on or off";
+            clipboard_on_ = w[2] == "on";
+            return "clipboard: " + w[2];
+        }
         if (w.size() >= 3 && w[1] == "fps") {
             if (w[2] != "on" && w[2] != "off") return "fps: on or off";
             show_fps_ = w[2] == "on";
             return "fps: " + w[2];
         }
-        return "set: transition slide|dip|dissolve|crossfade   transition-ms N   void-color RRGGBB|off   fps on|off";
+        return "set: transition slide|dip|dissolve|crossfade   transition-ms N   void-color RRGGBB|off   fps on|off   clipboard on|off";
     }
     if (cmd == "quit" || cmd == "q" || cmd == "exit") { done_ = true; return ""; }
     if (cmd == "help") { help_scroll_ = 0; set_mode(Mode::Help); return ""; }
@@ -440,6 +445,7 @@ const HelpItem HELP[] = {
     {2, "set transition-ms N", "How long one step takes, 0 to 5000 (0 switches at once)"},
     {2, "set void-color RRGGBB", "The colour of the empty space while a console is opening or closing (or off)"},
     {2, "set fps on|off", "Show the frame rate on the bar"},
+    {2, "set clipboard on|off", "Let programs (micro, vim ...) copy to your clipboard with OSC 52 (on by default)"},
     {2, "help", "This card"},
     {2, "quit", "Close everything and leave"},
 };
@@ -758,6 +764,18 @@ void App::resize(int rows, int cols) {
 InputModes App::input_modes() {
     if (windows_.empty()) return InputModes();
     return windows_[(size_t)active_].session->modes();
+}
+
+std::string App::take_terminal_output() {
+    std::string out;
+    for (size_t i = 0; i < windows_.size(); i++) {
+        Session& s = *windows_[i].session;
+        if (!s.has_clipboard()) continue;
+        const std::vector<std::string> writes = s.take_clipboard();
+        if (clipboard_on_ && (int)i == active_)
+            for (const std::string& w : writes) out += w;
+    }
+    return out;
 }
 
 std::string App::title() {

@@ -74,6 +74,46 @@ bool same_screen(const Emulator& a, const Emulator& b) {
 }  // namespace
 
 int main() {
+    // ---- OSC 52: the program sets the clipboard; only a valid write is kept, as the whole sequence for the real terminal
+    {
+        Emulator e(5, 20);
+        CHECK(!e.has_clipboard());
+        e.feed("\x1b]52;c;aGVsbG8=\x07");
+        CHECK(e.has_clipboard());
+        std::vector<std::string> w = e.take_clipboard();
+        CHECK_EQ(w.size(), (size_t)1);
+        CHECK_EQ(w[0], std::string("\x1b]52;c;aGVsbG8=\x07"));
+        CHECK(!e.has_clipboard());
+        e.feed("\x1b]52;;aGk=\x1b\\");                                     // ST, and no selection named: c
+        w = e.take_clipboard();
+        CHECK_EQ(w.size(), (size_t)1);
+        CHECK_EQ(w[0], std::string("\x1b]52;c;aGk=\x07"));
+        e.feed("\x1b]52;pc;aGk=\x07");                                     // other selections are passed on as they are
+        w = e.take_clipboard();
+        CHECK(w.size() == 1 && w[0] == "\x1b]52;pc;aGk=\x07");
+        // not kept: a query, a clear, the "!" micro sends first, a broken selection, text that is not base64, no data field at all
+        e.feed("\x1b]52;c;?\x07\x1b]52;c;\x07\x1b]52;c;!\x07\x1b]52;x;aGk=\x07\x1b]52;c;aGk\x1b]0;t\x07\x1b]52;c\x07\x1b]52;c;a b\x07");
+        CHECK(!e.has_clipboard());
+        CHECK_EQ(e.title(), std::string("t"));                               // (and the string with an ESC in it ended there)
+        // nothing in the data can end the sequence early or add one of its own
+        e.feed("\x1b]52;c;aGk=\x07\x1b]52;c;aG\x1b\\k\x07");
+        w = e.take_clipboard();
+        CHECK(w.size() >= 1 && w[0] == "\x1b]52;c;aGk=\x07");
+        for (const std::string& one : w) CHECK(one.find('\x1b', 1) == std::string::npos);
+        // a flood: only the last four wait
+        for (int i = 0; i < 10; i++) e.feed("\x1b]52;c;" + std::string(1, (char)('A' + i)) + "A==\x07");
+        w = e.take_clipboard();
+        CHECK_EQ(w.size(), (size_t)4);
+        CHECK_EQ(w[3], std::string("\x1b]52;c;JA==\x07"));
+        // a long one, split anywhere
+        const std::string big(300000, 'A');
+        Emulator f(5, 20);
+        const std::string msg = "\x1b]52;c;" + big + "\x07";
+        for (size_t i = 0; i < msg.size(); i += 7777) f.feed(msg.substr(i, 7777));
+        w = f.take_clipboard();
+        CHECK(w.size() == 1 && w[0].size() == big.size() + 8);
+    }
+
     // ---- DECCOLM: 80 or 132 columns of the pane, but only when the program allowed it (mode 40, as xterm needs)
     {
         Emulator e(5, 100);

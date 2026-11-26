@@ -66,6 +66,10 @@ public:
     InputModes input_modes();
     // The title of the shown console, for the real terminal's title.
     std::string title();
+    // Bytes for the real terminal that are not the picture: the clipboard writes (OSC 52) of the shown console (a console in the background does
+    // not get to set your clipboard; its writes are dropped). Call once a frame; write what it returns.
+    std::string take_terminal_output();
+    bool clipboard_on() const { return clipboard_on_; }
 
     // Run a command line as if typed after the colon (also for tests). Returns the message to show, if any.
     std::string run_command(const std::string& line, double now);
@@ -133,6 +137,7 @@ private:
     int help_scroll_ = 0;
     vtscreen::Picture card_pic_;                 // the screen with the help card over it
     bool show_fps_ = false;                      // the frame rate on the bar (set fps on)
+    bool clipboard_on_ = true;                   // programs may set the clipboard (set clipboard on|off)
     double fps_ = 0;
     int fps_frames_ = 0;
     double fps_since_ = -1;

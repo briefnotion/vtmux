@@ -98,6 +98,10 @@ public:
 
     // What the program asked of the terminal, for the host to write back to it. Taking it empties it.
     std::string take_reply() { std::string s; s.swap(reply_); return s; }
+    // Clipboard writes the program asked for (OSC 52), each as the whole sequence to send to the real terminal (ESC ] 52 ; selection ; base64 BEL).
+    // Only valid writes are kept: a query (?), an empty or broken one is dropped, and only the last few wait to be taken.
+    bool has_clipboard() const { return !clipboard_.empty(); }
+    std::vector<std::string> take_clipboard() { std::vector<std::string> v; v.swap(clipboard_); return v; }
 
     // Modes the host needs: how to send keys and mouse and focus, and whether to wrap a paste.
     bool application_cursor_keys() const { return app_cursor_keys_; }
@@ -213,6 +217,7 @@ private:
 
     std::string title_;
     std::string reply_;
+    std::vector<std::string> clipboard_;
     int bell_count_ = 0;
     char32_t last_printed_ = 0;                // for REP
 

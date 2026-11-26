@@ -251,6 +251,32 @@ def test_attributes_and_wide():
         check('WIDE:日本|END' in line, 'wide letters arrive as letters (not question marks): ' + line.strip())
     r.send('exit\n'); r.wait_exit(); r.close()
 
+def test_clipboard_with_micro():
+    # micro with its clipboard set to "terminal" copies with an OSC 52 sequence: it has to reach the real terminal
+    import shutil, tempfile, base64
+    if not shutil.which('micro'):
+        print('  (micro is not installed: skipped)'); return
+    d = tempfile.mkdtemp(prefix='vtmux_micro_')
+    open(d + '/settings.json', 'w').write('{"clipboard": "terminal"}')
+    open(d + '/file.txt', 'w').write('copy this text\nsecond line\n')
+    r = Run(['--', 'micro', d + '/file.txt'], cols=80, rows=25, env={'MICRO_CONFIG_HOME': d})
+    r.pump(1.5)
+    r.send('\x01'); r.pump(0.4)                        # select all
+    mark = len(r.raw)
+    r.send('\x03'); r.pump(1.0)                        # copy
+    new = r.raw[mark:]
+    m = [x for x in new.split(b'\x1b]52;c;')[1:]]
+    want = base64.b64encode(b'copy this text\nsecond line\n')
+    check(any(x.startswith(want + b'\x07') for x in m), 'the copy reaches the real terminal as OSC 52: ' + repr(new[-120:]))
+    check('Copied selection' in r.text(), 'micro says it copied')
+    # with the clipboard off in vtmux nothing goes out
+    r.send('\x02:set clipboard off\r'); r.pump(0.3)
+    mark = len(r.raw)
+    r.send('\x03'); r.pump(0.8)
+    check(b'\x1b]52' not in r.raw[mark:], 'nothing is sent with the clipboard off')
+    r.send('\x11'); r.pump(0.3); r.close()
+    shutil.rmtree(d, ignore_errors=True)
+
 def test_no_color_and_args():
     r = Run(['--no-color'])
     r.send('echo READY$((20+22))\n')
@@ -306,7 +332,7 @@ def test_kill_leaves_nothing():
 
 TESTS = [test_basic, test_ctrl_c_and_z, test_resize, test_commands_and_switching, test_alt_screen_programs, test_top_and_htop,
          test_mode_mirroring, test_utf8_and_input_exactness, test_no_color_and_args, test_heavy_output_and_idle,
-         test_rapid_switching, test_kill_leaves_nothing, test_attributes_and_wide]
+         test_rapid_switching, test_kill_leaves_nothing, test_attributes_and_wide, test_clipboard_with_micro]
 
 if __name__ == '__main__':
     if not os.path.exists(BIN):

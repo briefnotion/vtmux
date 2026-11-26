@@ -1,5 +1,7 @@
 #include "emulator.h"
 
+#include <cstring>
+
 #include <algorithm>
 
 #include "width.h"
@@ -293,6 +295,27 @@ void Emulator::osc(std::string_view text) {
     if (semi == std::string_view::npos) return;
     const std::string_view num = text.substr(0, semi);
     if (num == "0" || num == "2") title_ = std::string(text.substr(semi + 1));
+    else if (num == "52") {                                      // 52 ; selection ; base64 data: the program sets the clipboard
+        const std::string_view rest = text.substr(semi + 1);
+        const size_t second = rest.find(';');
+        if (second == std::string_view::npos) return;
+        std::string_view sel = rest.substr(0, second);
+        const std::string_view data = rest.substr(second + 1);
+        if (sel.empty()) sel = "c";
+        for (char c : sel) if (!std::strchr("cpqs01234567", c)) return;                      // not a selection name
+        if (data.empty() || data == "?") return;                                          // a query (the answer is never given) or a clear
+        for (char c : data) {
+            const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=';
+            if (!ok) return;                                                              // not base64: nothing that could end the sequence early
+        }
+        std::string seq = "\x1b]52;";
+        seq.append(sel);
+        seq += ';';
+        seq.append(data);
+        seq += '\x07';
+        clipboard_.push_back(std::move(seq));
+        if (clipboard_.size() > 4) clipboard_.erase(clipboard_.begin());                  // a flood: only the latest are kept
+    }
 }
 
 void Emulator::vt52_escape(char final) {

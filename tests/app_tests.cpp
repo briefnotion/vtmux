@@ -343,6 +343,35 @@ int main() {
         CHECK(screen_text(app.frame(g_now)).find("vtmux help") != std::string::npos);
     }
 
+    // ---- the clipboard: the shown console's writes (OSC 52) go to the real terminal; one in the background does not set your clipboard
+    {
+        AppOptions o = options();
+        o.first_command = {"sh", "-c", "sleep 0.5; printf '\\033]52;c;Zmlyc3Q=\\007'; sleep 30"};         // "first", a little later
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(app.clipboard_on());
+        CHECK(app.take_terminal_output().empty());
+        app.run_command("new second -- sh -c \"sleep 0.6; printf '\\033]52;c;c2Vjb25k\\007'; sleep 30\"", g_now);   // "second", later still
+        std::string got;
+        CHECK(pump(app, [&] { got += app.take_terminal_output(); return got.find("c2Vjb25k") != std::string::npos; }, 6000));
+        CHECK_EQ(got, std::string("\x1b]52;c;c2Vjb25k\x07"));                       // the shown one's; the first one's was dropped
+        app.run_command("goto 1", g_now);
+        CHECK(app.take_terminal_output().empty());
+    }
+    {
+        AppOptions o = options();
+        o.first_command = {"sh", "-c", "sleep 0.4; printf '\\033]52;c;b2Zm\\007'; sleep 30"};
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(app.run_command("set clipboard off", g_now) == "clipboard: off");
+        CHECK(!app.clipboard_on());
+        std::string got;
+        pump(app, [&] { got += app.take_terminal_output(); return false; }, 1500);
+        CHECK(got.empty());                                                         // off: nothing goes out
+        CHECK(app.run_command("set clipboard maybe", g_now).find("clipboard:") == 0);
+        CHECK(app.run_command("set clipboard on", g_now) == "clipboard: on");
+    }
+
     // ---- the history: arrows and pages in command mode scroll back, Escape or typing comes back live
     {
         App app(10, 60, options());

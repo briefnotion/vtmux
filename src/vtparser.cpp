@@ -94,7 +94,9 @@ void VtParser::byte(uint8_t b, VtParserEvents& ev) {
         if (b == 0x07 && state_ == State::OscString) { finish_string(ev); return; }     // BEL ends an OSC
         if (b == 0x18 || b == 0x1A) { string_.clear(); string_too_long_ = false; state_ = State::Ground; return; }   // CAN, SUB
         if (state_ == State::OscString) {
-            if (string_.size() < MAX_STRING) string_ += (char)b; else string_too_long_ = true;
+            // a clipboard write (OSC 52) may be a whole page of text; any other string is kept short
+            const size_t limit = (string_.size() >= 3 && string_.compare(0, 3, "52;") == 0) ? MAX_CLIPBOARD_STRING : MAX_STRING;
+            if (string_.size() < limit) string_ += (char)b; else string_too_long_ = true;
         }
         return;
     }

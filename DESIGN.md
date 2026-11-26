@@ -34,7 +34,7 @@ Commands (after `:`):
 | `next`, `prev`, `goto N` | switch, with the transition |
 | `rename NAME` | name this console |
 | `list` | show the consoles on the bar for a moment |
-| `set transition slide\|dip\|dissolve\|crossfade`, `set transition-ms N`, `set void-color RRGGBB\|off`, `set fps on\|off` | how, and how long, the switch looks; the frame rate on the bar |
+| `set transition slide\|dip\|dissolve\|crossfade`, `set transition-ms N`, `set void-color RRGGBB\|off`, `set fps on\|off`, `set clipboard on\|off` | how, and how long, the switch looks; the frame rate on the bar |
 | `quit` | close everything and leave |
 | `help` | a card over the middle of the screen (about 2/3, at most 90 wide) listing the keys and commands; the console runs on underneath; arrows scroll, Enter/Space/Esc/q close (mode `Help`) |
 

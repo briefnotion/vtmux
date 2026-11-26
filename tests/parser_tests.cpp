@@ -140,6 +140,20 @@ int main() {
         CHECK(run("\x1b]0;" + just + "\x07").rfind("osc[0;x", 0) == 0);
     }
 
+    {   // a clipboard write (OSC 52) is allowed to be long, up to 1 MiB; one over that is dropped; the same size of any other string is dropped
+        const std::string text(100000, 'Q');
+        const std::string got = run("\x1b]52;c;" + text + "\x07" "k");
+        CHECK(got.rfind("osc[52;c;QQQQ", 0) == 0);
+        CHECK(got.size() == std::string("osc[52;c;]").size() + text.size() + std::string(" p107 ").size());
+        const std::string huge(VtParser::MAX_CLIPBOARD_STRING + 10, 'Q');
+        CHECK_EQ(run("\x1b]52;c;" + huge + "\x07" "k"), std::string("p107 "));
+        const std::string mid(VtParser::MAX_STRING + 100, 'Q');
+        CHECK_EQ(run("\x1b]53;c;" + mid + "\x07" "k"), std::string("p107 "));
+        CHECK_EQ(run("\x1b]5;c;" + mid + "\x07" "k"), std::string("p107 "));           // "5;" and "52" without the semicolon are not it
+        CHECK_EQ(run("\x1b]520;" + mid + "\x07" "k"), std::string("p107 "));
+        CHECK(run("\x1b]52;c;" + text + "\x1b\\").rfind("osc[52;c;QQQQ", 0) == 0);      // ST ends it too
+    }
+
     // ---- split anywhere: the same events whole, a byte at a time, or in random pieces
     const std::string samples[] = {
         "hello \x1b[1;31mred\x1b[0m \xC3\xA9\xE4\xB8\xAD\xF0\x9F\x98\x80 \x1b]0;title\x07 \x1b(0lqk\x1b(B\x1b[?1049h\x1b[2J\x1b[H\x08\t\r\n",

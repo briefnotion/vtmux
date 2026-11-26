@@ -110,6 +110,17 @@ int main() {
         CHECK(wait_for([&] { return contains(s, "6 90"); }));
     }
 
+    // ---- a program sets the clipboard (OSC 52): the session keeps it for whoever shows it
+    {
+        Session s(5, 40, {"sh", "-c", "printf '\\033]52;c;aGVsbG8=\\007'; sleep 30"});
+        CHECK(s.start(error));
+        CHECK(wait_for([&] { return s.has_clipboard(); }));
+        const std::vector<std::string> w = s.take_clipboard();
+        CHECK(w.size() == 1 && w[0] == "\x1b]52;c;aGVsbG8=\x07");
+        CHECK(!s.has_clipboard());
+        CHECK(s.take_clipboard().empty());
+    }
+
     // ---- closing hangs the program up, and leaves nothing behind
     {
         pid_t pid;
