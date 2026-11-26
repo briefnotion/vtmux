@@ -7,8 +7,9 @@ screens slide (or fade) into each other.
 
 ![vtmux](docs/demo_sheet.png)
 
-*Top left: a console and the blue bar. Top right: after `Ctrl-B` the bar turns amber. Bottom left: halfway through a fade between two
-consoles. Bottom right: the second console.*
+*vtmux running real programs, with its bar along the bottom. Top: the radar map from [vtweather](https://github.com/briefnotion/vtweather) in the
+second console, with `Ctrl-B` pressed (the bar is amber, command mode). Bottom left: the thunderstorm scene from vtshow, in the fourth console.
+Bottom right: a chat program showing Chinese text (生日快乐, "happy birthday"), drawn two columns wide.*
 
 It is built on [vtscreen](https://github.com/briefnotion/vtscreen), the same drawing library as vtshow and vtweather, with its
 retained pictures: an idle console costs next to nothing to draw. The terminal emulator inside (`src/emulator.*`) is new, a state
@@ -124,7 +125,7 @@ paste, mouse, focus) and takes it out of them again on the way out.
   (SIGWINCH), and the screen clears. A full reset (`reset`, `ESC c`), mode 40 turned off, or resizing the window brings back the whole pane.
   Without mode 40 the switch only clears the screen, so the `reset` command does not narrow anything. vttest's double width lines are not
   drawn double (see above).
-- `tools/demo.py` makes the screenshots above; `tools/preview_transition.py` renders the three fades.
+- `tools/demo.py` makes a set of screenshots of vtmux from a pseudo-terminal; `tools/preview_transition.py` renders the three fades.
 
 ## Licence
 
