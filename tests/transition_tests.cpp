@@ -500,7 +500,294 @@ void test_dissolve_keeps_wide_pairs() {
     for (int r = 0; r < 3; r++) CHECK(((out.at(r, 2).attrs & vtscreen::CELL_WIDE) != 0) == ((out.at(r, 3).attrs & vtscreen::CELL_TAIL) != 0));
 }
 
+// ---------------------------------------------------------------- pictures made of pixels
+
+using vtscreen::ImagePlacement;
+using vtscreen::Pixel;
+using vtscreen::Raster;
+
+const int CW = 10, CH = 20;                                  // the cell of the pretend terminal
+
+// A picture of `body` rows with a Raster of w x h pixels placed at (row, col): every pixel's colour says where it is and which one it is (tag).
+Picture with_image(Picture p, int row, int col, int w, int h, int tag, double letter_rate = -1) {
+    auto r = std::make_shared<Raster>();
+    r->init(w, h);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) r->set(x, y, 40 + (x * 3 + tag * 17) % 200, 40 + (y * 5 + tag * 29) % 200, 60 + tag * 40, 255);
+    p.place_image(r, row, col, letter_rate);
+    return p;
+}
+
+// what a picture's placements make of the pane, pixel by pixel (the later over the earlier); the pane is rows x cols cells
+std::vector<Pixel> pane(const Picture& p, int rows, int cols) {
+    std::vector<Pixel> out((size_t)rows * CH * cols * CW);
+    const int W = cols * CW, H = rows * CH;
+    for (const ImagePlacement& ip : p.images) {
+        if (!ip.raster) continue;
+        for (int y = 0; y < ip.raster->h; y++)
+            for (int x = 0; x < ip.raster->w; x++) {
+                const int px = ip.col * CW + x, py = ip.row * CH + y;
+                if (px < 0 || py < 0 || px >= W || py >= H) continue;      // (what the screen cuts off)
+                if (ip.raster->at(x, y).a) out[(size_t)py * W + px] = ip.raster->at(x, y);
+            }
+    }
+    return out;
+}
+
+bool same_pane(const std::vector<Pixel>& a, const std::vector<Pixel>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); i++) {
+        if ((a[i].a == 0) != (b[i].a == 0)) return false;
+        if (a[i].a && (a[i].r != b[i].r || a[i].g != b[i].g || a[i].b != b[i].b)) return false;
+    }
+    return true;
+}
+
+int count_ink(const std::vector<Pixel>& v) { int n = 0; for (const Pixel& p : v) n += p.a ? 1 : 0; return n; }
+
+void test_images_at_the_ends() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);
+    Picture b = with_image(make(6, 12, 2, U'A'), 0, 0, 50, 60, 2);
+    Picture out;
+    for (TransitionStyle st : ALL_STYLES) {
+        blend(a, b, 0.0, st, out, CW, CH);
+        CHECK(out.images.size() == 1 && out.images[0].raster == a.images[0].raster && out.images[0].row == 1 && out.images[0].col == 2);
+        blend(a, b, 1.0, st, out, CW, CH);
+        CHECK(out.images.size() == 1 && out.images[0].raster == b.images[0].raster && out.images[0].row == 0);
+        blend(a, b, -3.0, st, out, CW, CH);
+        CHECK(out.images.size() == 1 && out.images[0].raster == a.images[0].raster);
+    }
+    // a picture that has none gives none, and what out carried before is not left on it
+    Picture plain = make(6, 12, 3, U'x');
+    blend(a, b, 0.0, TransitionStyle::Dissolve, out, CW, CH);
+    CHECK(out.images.size() == 1);
+    blend(plain, plain, 0.5, TransitionStyle::Dissolve, out, CW, CH);
+    CHECK(out.images.empty());
+    blend(a, b, 0.5, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(!out.images.empty());
+    blend(plain, plain, 0.5, TransitionStyle::Dip, out, CW, CH);
+    CHECK(out.images.empty());
+    blend(a, b, 0.5, TransitionStyle::Crossfade, out, CW, CH);
+    blend(plain, plain, 0.0, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(out.images.empty() && out.fade_level == 0);
+    blend(a, b, 0.5, TransitionStyle::Crossfade, out, CW, CH);
+    blend(plain, plain, 1.0, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(out.images.empty());
+    blend(a, b, 0.5, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(out.fade_level == 1);
+    blend(plain, plain, 0.5, TransitionStyle::Dip, out, CW, CH);
+    CHECK(out.fade_level == 0);
+    // screens of different sizes: no pixels come along, whatever the style and the place on the way
+    Picture other = with_image(make(5, 10, 4, U'z'), 0, 0, 20, 20, 3);
+    for (TransitionStyle st : ALL_STYLES)
+        for (double pct : {0.0, 0.3, 0.7, 1.0}) {
+            blend(a, other, pct, st, out, CW, CH);
+            CHECK(out.images.empty());
+        }
+    // a screen that is not drawn: nothing
+    Picture empty;
+    blend(empty, empty, 0.5, TransitionStyle::Dissolve, out, CW, CH);
+    CHECK(out.images.empty());
+}
+
+void test_images_crossfade() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);
+    Picture b = with_image(make(6, 12, 2, U'A'), 2, 4, 50, 60, 2);
+    Picture out;
+    blend(a, b, 0.25, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(out.images.size() == 2);                                          // both dissolve (vtscreen's fade)
+    const int bn = 50 * 60;
+    int ink_a = 0, ink_b = 0;
+    for (const ImagePlacement& ip : out.images) {
+        int n = 0;
+        for (const Pixel& q : ip.raster->px) n += q.a ? 1 : 0;
+        (ip.row == 1 ? ink_a : ink_b) += n;
+    }
+    CHECK(ink_a > 30 * 40 * 0.6 && ink_a < 30 * 40 * 0.9);                  // about 3/4 of a's pixels
+    CHECK(ink_b > bn * 0.1 && ink_b < bn * 0.4);                            // about 1/4 of b's
+    // the same picture twice, the same fade: the same result
+    Picture again;
+    blend(a, b, 0.25, TransitionStyle::Crossfade, again, CW, CH);
+    CHECK(same_pane(pane(out, 6, 12), pane(again, 6, 12)));
+    // sizes that differ: the cells are mixed over what they share, and no pixels come along
+    Picture c = make(5, 10, 4, U'z');
+    blend(a, c, 0.5, TransitionStyle::Crossfade, out, CW, CH);
+    CHECK(out.images.empty());
+}
+
+void test_images_dissolve() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);
+    a = with_image(a, 3, 5, 40, 20, 3);
+    Picture b = with_image(make(6, 12, 2, U'A'), 0, 0, 50, 60, 2);
+    const std::vector<Pixel> pa = pane(a, 6, 12), pb = pane(b, 6, 12);
+    Picture out;
+    int mixed = 0;
+    for (int k = 1; k < 20; k++) {
+        const double pct = k / 20.0;
+        blend(a, b, pct, TransitionStyle::Dissolve, out, CW, CH);
+        const std::vector<Pixel> got = pane(out, 6, 12);
+        // the model: each cell's pixels are a's or b's, as its letter is
+        std::vector<Pixel> want(got.size());
+        const int W = 12 * CW;
+        int from_a = 0, from_b = 0;
+        for (int r = 0; r < 6; r++)
+            for (int c = 0; c < 12; c++) {
+                const bool pick_b = out.at(r, c).ch >= U'A' && out.at(r, c).ch < U'A' + 20;
+                (pick_b ? from_b : from_a)++;
+                const std::vector<Pixel>& src = pick_b ? pb : pa;
+                for (int y = 0; y < CH; y++)
+                    for (int x = 0; x < CW; x++) want[(size_t)(r * CH + y) * W + c * CW + x] = src[(size_t)(r * CH + y) * W + c * CW + x];
+            }
+        CHECK(same_pane(got, want));
+        if (from_a > 0 && from_b > 0) mixed++;
+    }
+    CHECK(mixed > 10);                                                      // (the model said something: the cells were mixed)
+    // the letters of the cells that changed over are b's: all of b's pixels that are left are in cells where b's letter is
+    // nothing drawn twice: no pixel of a under a pixel of b in a cell that changed over
+    blend(a, b, 0.5, TransitionStyle::Dissolve, out, CW, CH);
+    CHECK(out.images.size() == 3);
+    // a's and b's rasters are not changed by it
+    CHECK(same_pane(pane(a, 6, 12), pa) && same_pane(pane(b, 6, 12), pb));
+    // without the size of a cell: the nearer screen's pictures whole
+    blend(a, b, 0.3, TransitionStyle::Dissolve, out);
+    CHECK(out.images.size() == a.images.size() && out.images[0].raster == a.images[0].raster);
+    blend(a, b, 0.7, TransitionStyle::Dissolve, out);
+    CHECK(out.images.size() == 1 && out.images[0].raster == b.images[0].raster);
+    // a picture with nothing in the cells that are taken from it is not copied
+    Picture only_a = with_image(make(6, 12, 1, U'a'), 0, 0, 10, 20, 1);          // one cell, row 0 column 0
+    Picture none = make(6, 12, 2, U'A');
+    int same_raster = 0;
+    for (int k = 1; k < 20; k++) {
+        blend(only_a, none, k / 20.0, TransitionStyle::Dissolve, out, CW, CH);
+        if (!out.images.empty() && out.images[0].raster == only_a.images[0].raster) same_raster++;
+    }
+    CHECK(same_raster > 0 && same_raster < 19);                                // (shared while its cell is a's, a copy with nothing in it ... or the copy cleared, after)
+}
+
+void test_images_dip() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);
+    Picture b = with_image(make(6, 12, 2, U'A'), 0, 0, 20, 20, 2);
+    Picture out;
+    for (int k = 1; k < 20; k++) {
+        const double pct = k / 20.0;
+        blend(a, b, pct, TransitionStyle::Dip, out, CW, CH);
+        const bool first = pct < 0.5;
+        const double kk = first ? 1.0 - 2.0 * pct : 2.0 * pct - 1.0;
+        const Picture& s = first ? a : b;
+        if (kk <= 0) { CHECK(out.images.empty()); continue; }
+        CHECK(out.images.size() == 1);
+        const Raster& want = *s.images[0].raster;
+        const Raster& got = *out.images[0].raster;
+        bool ok = got.w == want.w && got.h == want.h;
+        for (int y = 0; ok && y < want.h; y++)
+            for (int x = 0; ok && x < want.w; x++) {
+                const Pixel& q = want.at(x, y);
+                const Pixel& g = got.at(x, y);
+                ok = g.a == q.a && g.r == (uint8_t)std::floor(q.r * kk + 0.5) && g.g == (uint8_t)std::floor(q.g * kk + 0.5) &&
+                     g.b == (uint8_t)std::floor(q.b * kk + 0.5);
+            }
+        CHECK(ok);
+        CHECK(out.images[0].row == s.images[0].row && out.images[0].col == s.images[0].col);
+    }
+    blend(a, b, 0.5, TransitionStyle::Dip, out, CW, CH);
+    CHECK(out.images.empty());                                              // the middle is dark
+    blend(a, b, 0.25, TransitionStyle::Dip, out, CW, CH);
+    CHECK(a.images[0].raster->at(0, 0).r == 40 + (0 * 3 + 17) % 200);       // a's own pixels are not touched
+}
+
+void test_images_compose() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1, 7.5);
+    Picture b = with_image(make(6, 12, 2, U'A'), 0, 0, 20, 20, 2);
+    Picture bar = make(6, 12, 3, U'z');
+    Picture out;
+    compose({{&a, -5, 0}, {&b, 7, 0}}, bar, out);
+    CHECK(out.images.size() == 2);
+    CHECK(out.images[0].raster == a.images[0].raster && out.images[0].row == 1 && out.images[0].col == 2 - 5 && out.images[0].letter_rate == 7.5);
+    CHECK(out.images[1].raster == b.images[0].raster && out.images[1].row == 0 && out.images[1].col == 7);
+    compose({{&a, 0, 3}}, bar, out);
+    CHECK(out.images.size() == 1 && out.images[0].row == 4 && out.images[0].col == 2);
+    // the pixels land on the cells they were on, moved with the layer
+    Picture moved;
+    compose({{&a, 3, 2}}, bar, moved);
+    const std::vector<Pixel> was = pane(a, 6, 12), now = pane(moved, 6, 12);
+    bool ok = true;
+    for (int y = 0; y < 5 * CH && ok; y++)                                  // (rows that fit the 5 rows of the body)
+        for (int x = 0; x < 12 * CW && ok; x++) {
+            const int sx = x - 3 * CW, sy = y - 2 * CH;
+            const Pixel& g = now[(size_t)y * 12 * CW + x];
+            const Pixel w = (sx >= 0 && sy >= 0) ? was[(size_t)sy * 12 * CW + sx] : Pixel();
+            if (y >= 5 * CH) continue;
+            ok = (g.a == 0) == (w.a == 0) && (!g.a || (g.r == w.r && g.g == w.g && g.b == w.b));
+        }
+    CHECK(ok);
+    // no layer, or one with no pictures: none (and what out had before is gone)
+    compose({}, bar, out);
+    CHECK(out.images.empty());
+    Picture plain = make(6, 12, 4, U'p');
+    compose({{&a, 0, 0}}, bar, out);
+    compose({{&plain, 0, 0}}, bar, out);
+    CHECK(out.images.empty());
+    // a layer with a null picture
+    compose({{nullptr, 0, 0}, {&a, 0, 0}}, bar, out);
+    CHECK(out.images.size() == 1);
+}
+
+void test_images_without() {
+    Picture a = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);          // cells rows 1-2, columns 2-4
+    const std::vector<Pixel> was = pane(a, 6, 12);
+    // a hole in the middle
+    const std::vector<ImagePlacement> hole = images_without(a, 1, 3, 1, 1, CW, CH);
+    CHECK(hole.size() == 1 && hole[0].raster != a.images[0].raster);
+    Picture h; h.init(5, 12); h.images = hole;
+    const std::vector<Pixel> got = pane(h, 6, 12);
+    CHECK(count_ink(got) == count_ink(was) - CW * CH);
+    bool ok = true;
+    for (int y = 0; y < 6 * CH; y++)
+        for (int x = 0; x < 12 * CW; x++) {
+            const bool inside = y >= 1 * CH && y < 2 * CH && x >= 3 * CW && x < 4 * CW;
+            const Pixel& g = got[(size_t)y * 12 * CW + x];
+            const Pixel& w = was[(size_t)y * 12 * CW + x];
+            if (inside) ok = ok && g.a == 0;
+            else ok = ok && g.a == w.a && (!g.a || (g.r == w.r && g.g == w.g && g.b == w.b));
+        }
+    CHECK(ok);
+    CHECK(same_pane(pane(a, 6, 12), was));                                   // the picture itself is as it was
+    // a box that covers all of it, more than it, and some of it at the edge
+    CHECK(count_ink(pane([&] { Picture t; t.init(5, 12); t.images = images_without(a, 0, 0, 6, 12, CW, CH); return t; }(), 6, 12)) == 0);
+    CHECK(count_ink(pane([&] { Picture t; t.init(5, 12); t.images = images_without(a, 2, 4, 9, 9, CW, CH); return t; }(), 6, 12)) == count_ink(was) - CW * CH);     // (only the cell at row 2, column 4 is in it)
+    // no pixels in the box: the same raster, not a copy
+    const std::vector<ImagePlacement> miss = images_without(a, 4, 6, 2, 3, CW, CH);
+    CHECK(miss.size() == 1 && miss[0].raster == a.images[0].raster);
+    // a box over cells of the raster that have no pixels in them: the same raster too
+    Picture gap = with_image(make(6, 12, 1, U'a'), 1, 2, 30, 40, 1);
+    {
+        Raster r2 = *gap.images[0].raster;
+        for (int y = 0; y < CH; y++) for (int x = CW; x < 2 * CW; x++) r2.at(x, y) = Pixel();        // the cell at row 0, column 1 of it: empty
+        gap.images[0].raster = std::make_shared<Raster>(r2);
+        const std::vector<ImagePlacement> in_gap = images_without(gap, 1, 3, 1, 1, CW, CH);            // that cell, on the pane: row 1, column 3
+        CHECK(in_gap.size() == 1 && in_gap[0].raster == gap.images[0].raster);
+        const std::vector<ImagePlacement> next = images_without(gap, 1, 4, 1, 1, CW, CH);              // the cell beside it has pixels
+        CHECK(next.size() == 1 && next[0].raster != gap.images[0].raster);
+    }
+    // the cell size not known: as it is
+    const std::vector<ImagePlacement> unknown = images_without(a, 0, 0, 6, 12, 0, 0);
+    CHECK(unknown.size() == 1 && unknown[0].raster == a.images[0].raster);
+    // a picture whose last pieces are cut off the cell size (30 x 40 pixels is 3 x 2 cells; try a raster that is not a whole number of cells)
+    Picture odd = with_image(make(6, 12, 1, U'a'), 0, 0, 25, 30, 2);        // 3 x 2 cells, the last of them partial
+    Picture t; t.init(5, 12); t.images = images_without(odd, 1, 2, 1, 1, CW, CH);
+    CHECK(count_ink(pane(t, 6, 12)) == 25 * 30 - 5 * 10);                    // the cell at row 1, column 2 holds 5 x 10 pixels of it
+    // none at all
+    Picture plain = make(6, 12, 3, U'p');
+    CHECK(images_without(plain, 0, 0, 6, 12, CW, CH).empty());
+}
+
 int main() {
+    test_images_at_the_ends();
+    test_images_crossfade();
+    test_images_dissolve();
+    test_images_dip();
+    test_images_compose();
+    test_images_without();
     test_dissolve_keeps_wide_pairs();
     test_compose_slide();
     test_ease_and_slide_time();

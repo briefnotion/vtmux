@@ -1,5 +1,7 @@
 // PanePainter: what the emulator's screen looks like, as cells of a vtscreen Picture. Only the rows that changed are written (with
-// Picture::set, so a retained Picture only notes real changes), and the cursor.
+// Picture::set, so a retained Picture only notes real changes), and the cursor. Sixel pictures the emulator holds are put on the
+// Picture as pixels (Picture::place_image): one Raster just big enough to hold the cells that have a piece of a picture, made of
+// those pieces, and made again only where the pieces changed.
 #pragma once
 
 #include "emulator.h"
@@ -37,6 +39,13 @@ private:
     bool last_reverse_video_ = false;
     size_t last_scroll_back_ = 0;
     uint64_t last_serial_ = 0;                // the picture painted last (a different one is a full paint)
+
+    // the pictures made of pixels
+    void paint_pictures(const Emulator& emu, vtscreen::Picture& pic, int rows, int cols, size_t scroll_back);
+    std::shared_ptr<vtscreen::Raster> raster_;     // what is placed on the picture now (null: nothing)
+    int pic_row0_ = 0, pic_col0_ = 0, pic_rows_ = 0, pic_cols_ = 0;     // the block of cells it stands for
+    int pic_cw_ = 0, pic_ch_ = 0;                  // the size of a cell it was made for
+    std::vector<Tile> pic_tiles_;                  // for every cell of the block: the piece it shows
 };
 
 }  // namespace vtmux

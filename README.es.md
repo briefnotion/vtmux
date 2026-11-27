@@ -35,7 +35,7 @@ si lo ejecutas como root). `./install --system` lo pone en `/usr/local/bin` para
 
 Lo mismo que `./m`, a mano: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` omite la compilación de las pruebas.
 
-    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
+    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--no-images] [--fps N] [-- command args ...]
 
 Sin comando, la primera consola ejecuta tu shell (`$SHELL`). Los programas de dentro se ejecutan con `TERM=xterm-256color`.
 
@@ -72,6 +72,42 @@ cursor se dibuja cuando una consola ha aterrizado. Todo se mide con el reloj, as
   Tu programa de terminal puede tener también su propio interruptor para esto.
 - Pegar pasa como un pegado (con paréntesis, si el programa lo pidió).
 
+## Imágenes (Sixel)
+
+Si tu terminal puede dibujar imágenes Sixel, los programas de una consola pueden dibujarlas como lo harían en el propio terminal, y las imágenes se
+comportan como texto. (Se ha probado con Windows Terminal; cualquier terminal que responda a las dos preguntas de abajo debería servir.)
+
+Al arrancar, vtmux pregunta a tu terminal dos cosas: si puede dibujar Sixel y cuántos píxeles mide una celda de carácter. Quien pregunta es
+[vtpen](https://github.com/briefnotion/vtpen), antes de que vtmux se haga con la pantalla; tarda un momento, como mucho un segundo si el terminal nunca
+responde, y lo que escribas entretanto no se pierde. Después se dice la verdad a las consolas: los atributos de dispositivo nombran Sixel solo si el terminal
+lo tiene, se responden los tamaños de una celda y de la ventana (`CSI 14 t`, `16 t`, `18 t`; el tamaño de ventana del pseudoterminal lleva también los píxeles), también
+el número de colores y la imagen más grande (256 colores, 4096 por 4096 píxeles), y `XTVERSION` dice `vtmux`. Un programa que mira primero, como hacen los
+programas Sixel, hace entonces lo correcto.
+
+Lo que hace una imagen:
+
+- Se corta en trozos, uno por cada celda de carácter que cubre, y los trozos se quedan con sus celdas. La imagen se desplaza con el texto, pasa al historial
+  con sus líneas y se ve cuando miras atrás por el historial.
+- Una letra escrita sobre una celda se lleva el trozo de imagen de esa celda. Borrar, e insertar o eliminar caracteres y líneas, borra o mueve los trozos con
+  las celdas. La pantalla alternativa (vim, less) tiene sus propias imágenes. `ESC [ 3 J` borra las del historial, y un reinicio completo (`reset`) borra las de las pantallas.
+- Después de una imagen el cursor queda en la fila de debajo, en la columna donde empezó la imagen, y la pantalla se desplaza si hace falta (como hacen xterm y
+  los terminales DEC). Con el modo 8452 activado el cursor se queda en la última fila de la imagen, a su derecha. Con el modo 80 (DECSDM) activado la imagen
+  empieza arriba a la izquierda de la pantalla, nada se desplaza, lo que no cabe se corta y el cursor se queda donde estaba.
+- Las imágenes van con su consola en las transiciones: un deslizamiento las mueve, un fundido las disuelve píxel a píxel, una disolución cambia los píxeles de
+  cada celda junto con su letra, y la inmersión las oscurece. La tarjeta de ayuda se dibuja sobre una imagen, que se ve alrededor de ella.
+
+Límites:
+
+- Una imagen puede tener 4096 por 4096 píxeles y 256 colores (lo más grande se corta), y su texto Sixel hasta 32 MiB (lo que pase de eso se descarta, imagen incluida).
+- Se guardan 64 MiB de imágenes por consola (4 bytes por píxel). Cuando se llena, se van primero las imágenes que ya no muestra nada y luego las más antiguas,
+  aunque estén en el historial. Una imagen demasiado grande para guardarla no se muestra, pero ocupa igualmente su sitio en la pantalla.
+- El tamaño de una celda se pregunta una sola vez, al arrancar. Si cambias el tamaño de la fuente después, reinicia vtmux.
+- El cursor no se dibuja sobre una imagen.
+
+Si tu terminal no puede dibujar Sixel, o arrancas `vtmux --no-images` (o con `VTMUX_NO_IMAGES` definida, o con `--no-color`: sin color no hay imágenes), a los
+programas se les dice que no hay Sixel, y una imagen enviada de todos modos se descarta y no ocupa sitio. Lo mismo ocurre si vtmux se compiló sin su segundo
+submódulo, vtpen (`git clone --recursive` lo trae), que entonces simplemente no se usa.
+
 ## Comandos (después de los dos puntos)
 
 | comando | hace |
@@ -99,14 +135,18 @@ para un fundido (`blend`), dibuja la barra y muestra el resultado. Los bytes de 
 debe enviar entonces las teclas como el programa las espera, vtmux lo pone en los modos de entrada de la consola mostrada (teclas de cursor de aplicación, pegado con
 paréntesis, ratón, foco) y lo saca de ellos al salir.
 
+Una imagen Sixel se corta en un trozo por celda de carácter y se guarda en una capa de imágenes junto al texto (`src/pictures.h`), que sigue todo lo que
+les pase a las celdas; el pintor entrega los trozos a vtscreen como píxeles (`Picture::place_image`), y las transiciones los llevan consigo.
+
 ## Lo que aún no está hecho
 
 - Negrita, cursiva, subrayado, tachado y parpadeo se envían a tu terminal como los códigos habituales, y los caracteres anchos (chino, emoji) ocupan dos
   columnas. Cómo se ven, o si se ven siquiera (el parpadeo y la cursiva a menudo no), depende del programa de terminal. Los signos combinantes se
   descartan, y una letra que el terminal dibuja con un ancho distinto al de la tabla del emulador puede verse rara.
 - Sin separar y volver a conectar (no hay servidor), sin paneles divididos, sin modo de copia (el historial se puede mirar, no seleccionar), sin comandos de ratón, sin archivo de configuración.
-- No admitido por el emulador: sixel, líneas de doble ancho y de doble alto (`ESC # 3` a `6`; se ignoran), signos combinantes (se
+- No admitido por el emulador: líneas de doble ancho y de doble alto (`ESC # 3` a `6`; se ignoran), signos combinantes (se
   descartan). El cambio de 80/132 columnas (DECCOLM) funciona dentro del panel: véase más abajo.
+- Imágenes: no se dibuja nada en su lugar para un terminal que no puede mostrar Sixel, no se entiende ningún otro lenguaje gráfico (ReGIS), y el tamaño de una celda se pregunta solo una vez, al arrancar.
 
 ## Pruebas
 
@@ -115,6 +155,10 @@ paréntesis, ratón, foco) y lo saca de ellos al salir.
   fundidos, las sesiones (programas reales en pseudoterminales reales) y la aplicación (los modos, comandos y fundidos, dirigidos por bytes y un reloj inventado). `ctest --test-dir build` ejecuta las mismas pruebas desde la compilación con CMake.
 - `tests/e2e/run.sh` ejecuta el `vtmux` real en un pseudoterminal con programas reales dentro (`less`, `vi`, `top`, `htop`, Ctrl-C y
   Ctrl-Z, cambio de tamaño, el reflejo de modos, cambios rápidos, salida masiva, CPU en reposo) y lee la pantalla de vuelta con un emulador de terminal.
+- Las imágenes tienen sus propias pruebas. `tests/pictures_tests.cpp` alimenta flujos aleatorios a un emulador que guarda imágenes y a otro que guarda letras en su
+  lugar, y comprueba que lo que les pasa a los trozos es lo que les pasa a las letras (escribir encima, borrar, desplazar, el historial, la otra pantalla);
+  `tests/render_pictures_tests.cpp` comprueba los píxeles que el pintor entrega a vtscreen contra lo que guarda el emulador; las transiciones y la tarjeta de ayuda
+  también se prueban con imágenes, y la prueba de extremo a extremo ejecuta un programa que dibuja una imagen Sixel en un terminal simulado que puede y en otro que no.
 - `tests/conformance/run.sh` alimenta miles de flujos de secuencias de escape generados, pantallas escritas a mano y capturas de programas reales al
   emulador (`tools/vtdump.cpp`), a tmux y a pyte, y compara las pantallas. `tests/vt100_tests.cpp`, `vt102_tests.cpp` y `vt52_tests.cpp` fijan
   el comportamiento de los terminales DEC. Lo que encontró está en `tests/conformance/FINDINGS.md`.
@@ -128,4 +172,4 @@ paréntesis, ratón, foco) y lo saca de ellos al salir.
 
 ## Licencia
 
-Licencia Pública General de GNU, versión 3 (véase `LICENSE`). La biblioteca `vtscreen` sobre la que se construye tiene licencia MIT.
+Licencia Pública General de GNU, versión 3 (véase `LICENSE`). Las bibliotecas `vtscreen` (sobre la que se construye) y `vtpen` tienen licencia MIT.

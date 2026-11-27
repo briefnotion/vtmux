@@ -248,6 +248,106 @@ int main() {
         CHECK(app.fps() > 59 && app.fps() < 61);
     }
 
+    // ---- pictures made of pixels: they go along through the help card and the transitions
+    {
+        // a console that draws a Sixel picture of 90 x 25 cells (900 x 500 pixels) from the top left
+        const char* draw = "printf '\\033[1;1H\\033Pq\"1;1;900;500#1;2;100;0;0'; yes '#1!900~-' | head -84 | tr -d '\\n'; printf '\\033\\\\'; echo PICDONE; sleep 30";
+        auto ink_in_cell = [](const vtscreen::Picture& pic, int row, int col) {
+            for (const vtscreen::ImagePlacement& ip : pic.images) {
+                if (!ip.raster) continue;
+                for (int y = 0; y < 20; y++)
+                    for (int x = 0; x < 10; x++) {
+                        const int px = col * 10 + x - ip.col * 10, py = row * 20 + y - ip.row * 20;
+                        if (px >= 0 && py >= 0 && px < ip.raster->w && py < ip.raster->h && ip.raster->at(px, py).a) return true;
+                    }
+            }
+            return false;
+        };
+        AppOptions o = options();
+        o.first_command = {"sh", "-c", draw};
+        o.outer.cell_w = 10; o.outer.cell_h = 20; o.outer.sixel = true;
+        App app(30, 100, o);
+        CHECK(app.start(error));
+        CHECK(expect_shows(app, "PICDONE"));
+        CHECK(pump(app, [&] { return ink_in_cell(app.frame(g_now), 3, 3); }));
+        CHECK(ink_in_cell(app.frame(g_now), 10, 40) && ink_in_cell(app.frame(g_now), 24, 89));
+        CHECK(!ink_in_cell(app.frame(g_now), 25, 5) && !ink_in_cell(app.frame(g_now), 5, 90));        // (the picture is 90 x 25 cells)
+        // the help card: a box of rows 5 to 23, columns 17 to 82, over the picture: the pixels show round it, not through it
+        type(app, "\x02:help\r");
+        CHECK(app.mode() == Mode::Help);
+        const vtscreen::Picture& card = app.frame(g_now);
+        CHECK(card.at(5, 17).ch == U'┌');
+        CHECK(ink_in_cell(card, 3, 3) && ink_in_cell(card, 10, 5) && ink_in_cell(card, 4, 40) && ink_in_cell(card, 19, 16));       // round the card
+        CHECK(ink_in_cell(card, 24, 40) && ink_in_cell(card, 10, 83) && ink_in_cell(card, 24, 89));
+        CHECK(!ink_in_cell(card, 5, 17) && !ink_in_cell(card, 10, 40) && !ink_in_cell(card, 6, 18) && !ink_in_cell(card, 19, 79) && !ink_in_cell(card, 19, 17));   // not under it
+        CHECK(!ink_in_cell(card, 23, 17) && !ink_in_cell(card, 23, 82) && !ink_in_cell(card, 5, 82) && !ink_in_cell(card, 23, 40));     // (to the corners)
+        type(app, "q");
+        CHECK(app.mode() == Mode::Normal);
+        CHECK(ink_in_cell(app.frame(g_now), 10, 40));                       // the card closed: the whole picture is back
+    }
+    {   // a screen too small for the card: the pictures are left as they are
+        const char* tiny = "printf '\\033[1;1H\\033Pq\"1;1;200;20#1;2;100;0;0'; yes '#1!200~-' | head -4 | tr -d '\\n'; printf '\\033\\\\'; printf PICDONE; sleep 30";
+        AppOptions o = options();
+        o.first_command = {"sh", "-c", tiny};
+        o.outer.cell_w = 10; o.outer.cell_h = 20; o.outer.sixel = true;
+        App app(3, 40, o);                                                    // a console of 2 rows: no room for a card
+        CHECK(app.start(error));
+        CHECK(expect_shows(app, "PICDONE"));
+        CHECK(pump(app, [&] { return !app.frame(g_now).images.empty(); }));
+        type(app, "\x02:help\r");
+        CHECK(app.mode() == Mode::Help);
+        CHECK(!app.frame(g_now).images.empty());
+    }
+    {
+        const char* draw = "printf '\\033[1;1H\\033Pq\"1;1;200;100#1;2;100;0;0'; yes '#1!200~-' | head -17 | tr -d '\\n'; printf '\\033\\\\'; echo PICDONE; sleep 30";
+        auto ink = [](const vtscreen::Picture& pic) {
+            int n = 0, maxr = 0;
+            for (const vtscreen::ImagePlacement& ip : pic.images)
+                if (ip.raster) for (const vtscreen::Pixel& q : ip.raster->px) if (q.a) { n++; maxr = std::max(maxr, (int)q.r); }
+            return std::make_pair(n, maxr);
+        };
+        for (TransitionStyle st : {TransitionStyle::Slide, TransitionStyle::Dip, TransitionStyle::Dissolve, TransitionStyle::Crossfade}) {
+            AppOptions o = options();
+            o.style = st;
+            o.first_command = {"sh", "-c", draw};
+            o.outer.cell_w = 10; o.outer.cell_h = 20; o.outer.sixel = true;
+            App app(12, 40, o);
+            CHECK(app.start(error));
+            CHECK(expect_shows(app, "PICDONE"));
+            CHECK(pump(app, [&] { return ink(app.frame(g_now)).first > 0; }));
+            const int full = ink(app.frame(g_now)).first;
+            CHECK(full == 200 * 100);
+            CHECK(app.run_command("new b -- sh -c \"echo SECOND; sleep 30\"", g_now).empty());
+            CHECK(app.transitioning());
+            // while it moves, the picture is still there (in some form), and after it the first console has gone: no picture on the second
+            const double t0 = g_now;
+            int frames_with = 0, frames_less = 0, frames = 0;
+            bool moved = false, darkened = false;
+            for (int k = 0; k <= 100; k++) {
+                const vtscreen::Picture& pic = app.frame(t0 + k * 0.01);
+                if (!app.transitioning()) break;
+                frames++;
+                const auto n = ink(pic);
+                if (n.first > 0) frames_with++;
+                if (n.first > 0 && n.first < full) frames_less++;
+                for (const vtscreen::ImagePlacement& ip : pic.images) if (ip.col != 0 || ip.row != 0) moved = true;
+                if (n.first > 0 && n.second < 250) darkened = true;
+            }
+            CHECK(frames > 5);
+            CHECK(frames_with > 0);
+            if (st == TransitionStyle::Slide) CHECK(moved);
+            if (st == TransitionStyle::Dip) CHECK(darkened);
+            if (st == TransitionStyle::Dissolve || st == TransitionStyle::Crossfade) CHECK(frames_less > 0);
+            CHECK(pump(app, [&] { return !app.transitioning(); }));
+            CHECK(ink(app.frame(g_now)).first == 0);                         // the second console has no picture
+            // and back: the picture comes home whole
+            CHECK(app.run_command("goto 1", g_now).empty());
+            CHECK(pump(app, [&] { return !app.transitioning(); }));
+            CHECK(ink(app.frame(g_now)).first == full);
+            CHECK(app.frame(g_now).images.size() == 1 && app.frame(g_now).images[0].row == 0 && app.frame(g_now).images[0].col == 0);
+        }
+    }
+
     // ---- the help card: over the middle of the console, which goes on running; Enter, Space, Esc or q closes it; arrows scroll it
     {
         AppOptions o = options();
@@ -647,6 +747,29 @@ int main() {
         App app(10, 60, {{"sh", "-c", "printf '\\033[?1h\\033[?2004h'; sleep 5"}, TransitionStyle::Dip, 200, Theme(), 0x02});
         CHECK(app.start(error));
         CHECK(pump(app, [&] { return app.input_modes().application_cursor_keys && app.input_modes().bracketed_paste; }));
+    }
+
+    // ---- what the real terminal can do is told to every console (here: a cell of 9 x 18 pixels, and Sixel)
+    {
+        AppOptions o;
+        o.first_command = {"sh", "-c", "stty raw -echo; printf '\\033[16t\\033[c'; head -c 18 | tr '\\033' '@'; sleep 5"};
+        o.outer.cell_w = 9;
+        o.outer.cell_h = 18;
+        o.outer.sixel = true;
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(pump(app, [&] { return screen_text(app.frame(g_now)).find("@[6;18;9t@[?1;2;4c") != std::string::npos; }));     // the cell, and Sixel (4)
+        // and a console that is opened later is told too
+        type(app, "\x02:new -- sh -c \"stty raw -echo; printf '\\033[14t'; head -c 12 | tr '\\033' '@'; sleep 5\"\r");
+        CHECK(pump(app, [&] { return screen_text(app.frame(g_now)).find("@[4;162;540t") != std::string::npos; }));            // 9 rows of 18 and 60 columns of 9
+    }
+    // ---- and when it is not known, a console is told no pixels and no Sixel
+    {
+        AppOptions o;
+        o.first_command = {"sh", "-c", "stty raw -echo; printf '\\033[c\\033[14t\\033[18t'; head -c 16 | tr '\\033' '@'; sleep 5"};
+        App app(10, 60, o);
+        CHECK(app.start(error));
+        CHECK(pump(app, [&] { return screen_text(app.frame(g_now)).find("@[?1;2c@[8;9;60t") != std::string::npos; }));
     }
 
     if (failures == 0) std::printf("all app tests passed\n");

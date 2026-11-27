@@ -36,7 +36,7 @@ if you run it as root). `./install --system` puts it in `/usr/local/bin` for eve
 
 Da same t'ing as `./m` by hand: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` skips buildin' da tests.
 
-    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
+    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--no-images] [--fps N] [-- command args ...]
 
 Wit' no command da first console runs your shell (`$SHELL`). Programs inside run wit' `TERM=xterm-256color`.
 
@@ -73,6 +73,40 @@ cursor's drawn once a console has landed. Ever'tin' is timed by da clock, so a s
   Your terminal program might have its own switch for dis too.
 - Paste goes t'rough as a paste (bracketed, if da program asked for dat).
 
+## Pictures (Sixel)
+
+If your terminal can draw Sixel pictures, cher, programs in a console can draw dem like dey would in da terminal itself, and da pictures behave like
+text. (It been tried wit' Windows Terminal; any terminal dat answers da two questions below should do, yeah.)
+
+At start vtmux asks your terminal two t'ings: can it draw Sixel, and how big is one character cell in pixels. It's [vtpen](https://github.com/briefnotion/vtpen)
+dat asks, before vtmux takes da screen over; it takes a moment, a second at most when da terminal never answers, and what you type meanwhile ain't lost.
+Da consoles are den told da truth: the device attributes name Sixel only if the terminal has it, the sizes of a cell and of the window are answered (`CSI 14 t`, `16 t`, `18 t`; the pseudo-terminal's window size carries the pixels too), so are the number of colours and the biggest picture (256 colours, 4096 by
+4096 pixels), and `XTVERSION` says `vtmux`. A program dat looks first, like Sixel programs do, den does da right t'ing.
+
+What a picture does, I garontee:
+
+- It is cut into pieces, one for each character cell it covers, and the pieces stay with their cells. The picture scrolls with the text, goes into the history
+  with its lines, and shows when you look back through the history.
+- A letter written over a cell takes that cell's piece of the picture. Erasing, and inserting or deleting characters and lines, wipe or move the pieces with
+  the cells. The alternate screen (vim, less) has pictures of its own. `ESC [ 3 J` clears the ones in the history, and a full reset (`reset`) clears the ones on the screens.
+- After a picture the cursor is on the row below it, in the column where the picture began, and the screen scrolls if it has to (as xterm and the DEC
+  terminals do). With mode 8452 set the cursor stays on the last row of the picture, to its right. With mode 80 (DECSDM) set the picture starts at the top left
+  of the screen, nothing scrolls, what does not fit is cut off, and the cursor stays where it was.
+- Pictures go with their console through the transitions: a slide moves them, a crossfade dissolves the pixels, a dissolve changes each cell's pixels over
+  with its letter, and a dip darkens them. The help card is drawn over a picture, which shows round it.
+
+Limits:
+
+- A picture can be 4096 by 4096 pixels and 256 colours (bigger is cut off), and its Sixel text up to 32 MiB (more is thrown away, picture and all).
+- 64 MiB of pictures are kept for each console (4 bytes a pixel). When that is full, pictures that nothing shows any more go first, then the oldest, even
+  if they are in the history. A picture too big to keep is not shown, but still takes its room on the screen.
+- The size of a cell is asked once, at start. If you change the font size afterwards, restart vtmux.
+- The cursor is not drawn over a picture.
+
+When your terminal can't draw Sixel, or you start `vtmux --no-images` (or with `VTMUX_NO_IMAGES` set, or with `--no-color`: no pictures without colour), the
+programs are told there is no Sixel, and a picture sent anyway is thrown away and takes no room. The same is so when vtmux was built without its second
+submodule, vtpen (`git clone --recursive` brings it), which then is simply not used.
+
 ## Commands (after da colon)
 
 | command | does |
@@ -101,14 +135,18 @@ for a fade (`blend`), draws da bar, and shows da result. Normal-mode input bytes
 must den send keys da way da program expects, vtmux puts it in da shown console's input modes (application cursor keys, bracketed
 paste, mouse, focus) and takes it out of dem again on da way out.
 
+A Sixel picture is cut into one piece for each character cell and kept in a picture layer beside the text (`src/pictures.h`), which follows
+whatever happens to the cells; da painter gives da pieces to vtscreen as pixels (`Picture::place_image`), and da transitions carry dem along.
+
 ## What ain't done yet
 
 - Bold, italic, underline, striket'rough and blink are sent to your terminal as da usual codes, and wide characters (Chinese, emoji) take two
   columns. How dey look, or whether dey show at all (blink and italic often don't), is up to da terminal program. Combinin' marks are
   dropped, and a letter da terminal draws at a different width from da emulator's table can look odd.
 - No detach and attach (dere's no server), no splits, no copy mode (da history can be looked at, not selected from), no mouse commands, no config file.
-- Not supported by da emulator: sixel, double width and double height lines (`ESC # 3` to `6`; dey're ignored), combinin' marks (dey
+- Not supported by da emulator: double width and double height lines (`ESC # 3` to `6`; dey're ignored), combinin' marks (dey
   are dropped). Da 80/132 column switch (DECCOLM) works inside da pane: see below.
+- Pictures: no stand-in is drawn for a terminal dat can't show Sixel, no udder graphics language (ReGIS) is understood, and da size of a cell is asked only once, at start.
 
 ## Tests
 
@@ -118,6 +156,10 @@ paste, mouse, focus) and takes it out of dem again on da way out.
   clock). `ctest --test-dir build` runs da same tests from da CMake build.
 - `tests/e2e/run.sh` runs da real `vtmux` in a pseudo-terminal wit' real programs inside (`less`, `vi`, `top`, `htop`, Ctrl-C and
   Ctrl-Z, resizin', da mode mirrorin', rapid switchin', heavy output, idle CPU) and reads da screen back wit' a terminal emulator.
+- Da pictures got dey own tests. `tests/pictures_tests.cpp` feeds random streams into one emulator that holds pictures and another that holds letters in
+  their place, and checks dat what happens to da pieces is what happens to da letters (writing over, erasing, scrolling, the history, the other screen);
+  `tests/render_pictures_tests.cpp` checks the pixels the painter gives vtscreen against what the emulator holds; the transitions and the help card are
+  tested with pictures too, and the end-to-end test runs a program that draws a Sixel picture in a pretend terminal that can, and in one that cannot.
 - `tests/conformance/run.sh` feeds t'ousands of generated escape-sequence streams, hand-written screens and real program captures to da
   emulator (`tools/vtdump.cpp`), tmux and pyte, and compares da screens. `tests/vt100_tests.cpp`, `vt102_tests.cpp` and `vt52_tests.cpp` pin
   da DEC terminals' behaviour. What it found is in `tests/conformance/FINDINGS.md`.
@@ -131,4 +173,4 @@ paste, mouse, focus) and takes it out of dem again on da way out.
 
 ## Licence
 
-GNU General Public License, version 3 (see `LICENSE`). Da `vtscreen` library it builds on is MIT licensed. Now go on, cher, make us proud.
+GNU General Public License, version 3 (see `LICENSE`). Da `vtscreen` library it builds on, and `vtpen`, are MIT licensed. Now go on, cher, make us proud.

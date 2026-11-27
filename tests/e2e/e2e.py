@@ -15,9 +15,19 @@ def check(cond, what):
         print('  FAIL:', what)
     return cond
 
+# What a terminal answers to the questions vtmux asks at start-up (vtpen's probe). 'plain': it knows the size of its cells but not Sixel;
+# 'sixel': it can draw Sixel too; None: it answers nothing at all (the probe gives up after a second, and what was typed meanwhile must survive).
+def start_up_answers(kind):
+    if kind is None: return []
+    da1 = b'\x1b[?62;4c' if kind == 'sixel' else b'\x1b[?62c'
+    return [(b'\x1b[16t', b'\x1b[6;20;10t'), (b'\x1b[>c', b'\x1b[>0;10;1c'), (b'\x1b[18t', b'\x1b[8;30;100t'),
+            (b'\x1b[14t', b'\x1b[4;600;1000t'), (b'\x1b[c', da1)]
+
 class Run:
-    def __init__(self, args=(), cols=100, rows=30, env=None):
+    def __init__(self, args=(), cols=100, rows=30, env=None, terminal='plain'):
         self.cols, self.rows = cols, rows
+        self.answers = start_up_answers(terminal)
+        self.asked = b''
         self.raw = b''
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -45,6 +55,17 @@ class Run:
                 if not data: self.alive = False; return
                 self.raw += data
                 self.stream.feed(data)
+                self.answer_start_up(data)
+
+    def answer_start_up(self, data):
+        # the questions come before vtmux takes the screen over (the alternate screen); after that nothing is answered
+        if not self.answers or b'\x1b[?1049h' in self.raw: return
+        self.asked += data
+        for q, a in self.answers:
+            i = self.asked.find(q)
+            if i >= 0:
+                self.asked = self.asked[:i] + self.asked[i + len(q):]
+                os.write(self.fd, a)
 
     def send(self, s):
         os.write(self.fd, s.encode() if isinstance(s, str) else s)
@@ -330,9 +351,53 @@ def test_kill_leaves_nothing():
     check(out == '', 'a closed console leaves no program behind: ' + out)
     r.send('\x02:quit\r'); r.wait_exit(); r.close()
 
+def test_outer_terminal():
+    """What the real terminal can do reaches the consoles: the size of a cell, and Sixel only if the terminal draws it. What is typed
+    while the terminal is being asked is not lost, even when the terminal never answers."""
+    ask = "stty raw -echo; printf '\\033[c\\033[16t'; head -c %d | tr '\\033' '@'; sleep 30"
+    for kind, want, count in (('sixel', '@[?1;2;4c@[6;20;10t', 19), ('plain', '@[?1;2c@[6;20;10t', 17)):
+        r = Run(['--', 'sh', '-c', ask % count], terminal=kind)
+        check(r.wait_for(want, timeout=6), "a terminal that is '%s': the console sees %s (screen: %r)" % (kind, want, r.text()[:200]))
+        r.send('\x02:quit\r'); r.wait_exit(); r.close()
+    # a terminal that never answers: the console sees no pixel size, no Sixel, and the typing in the first second is kept
+    r = Run(['--', 'sh', '-c', ask % 7], terminal=None)
+    r.send('')                                              # (typing goes to the console only once it is up; the early keys wait in the tty)
+    check(r.wait_for('@[?1;2c', timeout=6), "a terminal that answers nothing: plain device attributes (screen: %r)" % r.text()[:200])
+    check('@[?1;2c@[6;' not in r.text(), 'and no pixel size')
+    r.send('\x02:quit\r'); r.wait_exit(); r.close()
+    r = Run(terminal=None)
+    r.send('echo AHEAD$((20+22))\n')                        # typed at once, while vtmux is still asking
+    check(r.wait_for('AHEAD42', timeout=8), 'what was typed while the terminal was asked is not lost')
+    r.send('\x02:quit\r'); r.wait_exit(); r.close()
+    # --no-images asks nothing
+    r = Run(['--no-images', '--', 'sh', '-c', ask % 7], terminal='sixel')
+    check(r.wait_for('@[?1;2c', timeout=6), '--no-images: no Sixel offered even by a terminal that draws it (screen: %r)' % r.text()[:200])
+    r.send('\x02:quit\r'); r.wait_exit(); r.close()
+
+def test_sixel_picture():
+    """A program draws a Sixel picture in its console: a terminal that draws Sixel is sent the picture, at the cells it covers; a terminal
+    that does not is sent none (and the program is not told it can)."""
+    pic = '\\033[3;5H\\033Pq"1;1;20;40#1;2;100;0;0' + '#1!20~-' * 7 + '\\033\\\\SIXELDONE'       # at row 3, column 5: 2 x 2 cells (a cell is 10 x 20 pixels)
+    cmd = "printf '%s'; sleep 30" % pic
+    r = Run(['--', 'sh', '-c', cmd], terminal='sixel')
+    check(r.wait_for('SIXELDONE'), 'the console shows what follows the picture (screen: %r)' % r.text()[:200])
+    r.pump(0.5)
+    check(r.screen.display[4].startswith('    SIXELDONE'), 'the cursor was left below the picture (row 5, column 5): %r' % r.screen.display[4][:30])
+    check(b'\x1b[3;5H\x1bP0;1;0q"1;1;20;20' in r.raw, 'the picture is sent for the first row of cells it covers')
+    check(b'\x1b[4;5H\x1bP0;1;0q"1;1;20;20' in r.raw, 'and for the second')
+    check(r.raw.count(b'\x1bP0;1;0q') == 2, 'and for nothing else (%d pictures)' % r.raw.count(b'\x1bP0;1;0q'))
+    r.send('\x02:quit\r'); r.wait_exit(); r.close()
+    r = Run(['--', 'sh', '-c', cmd], terminal='plain')
+    check(r.wait_for('SIXELDONE'), 'a terminal without Sixel: the console runs on (screen: %r)' % r.text()[:200])
+    r.pump(0.5)
+    check(b'\x1bP0;1;0q' not in r.raw, 'no picture is sent to a terminal that cannot draw it')
+    check(r.screen.display[2].startswith('    SIXELDONE'), 'and the picture took no room (the text is where the cursor was left)')
+    r.send('\x02:quit\r'); r.wait_exit(); r.close()
+
 TESTS = [test_basic, test_ctrl_c_and_z, test_resize, test_commands_and_switching, test_alt_screen_programs, test_top_and_htop,
          test_mode_mirroring, test_utf8_and_input_exactness, test_no_color_and_args, test_heavy_output_and_idle,
-         test_rapid_switching, test_kill_leaves_nothing, test_attributes_and_wide, test_clipboard_with_micro]
+         test_rapid_switching, test_kill_leaves_nothing, test_attributes_and_wide, test_clipboard_with_micro, test_outer_terminal,
+         test_sixel_picture]
 
 if __name__ == '__main__':
     if not os.path.exists(BIN):

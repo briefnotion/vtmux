@@ -42,6 +42,10 @@ public:
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
+    // What the real terminal can do (see Emulator::set_graphics): the size of one of its cells in pixels, and Sixel. Say it before start(),
+    // so the program is told the pixel size of its terminal from its first moment; later is fine too (the size is told again).
+    void set_graphics(int cell_w, int cell_h, bool sixel);
+
     // Start the program. False, with the reason, if it could not be started.
     bool start(std::string& error);
 
@@ -82,6 +86,7 @@ private:
     void reader();
     void hang_up();
     void tell_size();
+    int cell_w_ = 0, cell_h_ = 0;                // the real terminal's cell in pixels (0: not known), told to the program with the size
 
     int rows_, cols_;
     std::vector<std::string> command_;

@@ -52,11 +52,12 @@ A console that ends by itself (the shell exits) closes. Closing the last one lea
 
 | module | file | does | status |
 |---|---|---|---|
-| parser | `src/vtparser.*` | bytes to events (state machine, split-proof, UTF-8) | done, tested |
-| emulator | `src/emulator.*`, `src/width.*` | the terminal in memory: cells, cursor, scrollback, alt screen, modes, replies | done, being completed (VT52, VT102 extras) |
+| parser | `src/vtparser.*` | bytes to events (state machine, split-proof, UTF-8); the data of a Sixel string (`DCS q`) is collected, up to 32 MiB; other device control strings are skipped | done, tested |
+| emulator | `src/emulator.*`, `src/width.*` | the terminal in memory: cells, cursor, scrollback, alt screen, modes, replies; decodes Sixel (vtscreen's `sixel_decode`) and places it | done, being completed (VT52, VT102 extras) |
+| pictures | `src/pictures.h` | the picture layer: a tile (picture, piece) for each cell of both screens and each line of the scrollback, and the store of pictures with its budget | done, tested |
 | keys | `src/keys.*` | raw input bytes to key events (arrows, F keys, Escape, paste) for command mode | done, tested |
-| painter | `src/render.*` | emulator dirty rows to a retained vtscreen Picture (colours, bold, reverse, cursor) | done, tested |
-| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark; and `compose`, which places screens on a surface for the slide (a row of consoles; opening: the old one slides off left, then the new one drops in from the top; closing: the old one drops off the bottom, then the neighbour slides in; the void between is a fill colour). Slide is the default; (dip: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy) | done, tested |
+| painter | `src/render.*` | emulator dirty rows to a retained vtscreen Picture (colours, bold, reverse, cursor); the tiles to one Raster placed on the Picture | done, tested |
+| transition | `src/transition.*` | the blend of two pictures: crossfade, dissolve, dip to dark; and `compose`, which places screens on a surface for the slide (a row of consoles; opening: the old one slides off left, then the new one drops in from the top; closing: the old one drops off the bottom, then the neighbour slides in; the void between is a fill colour). Slide is the default; (dip: both screens stay readable; crossfade cuts at the half way point because text cannot mix; dissolve is noisy). The pictures made of pixels go along in every one | done, tested |
 | session | `src/session.*` | forkpty, the reader thread, the lock, resize, exit (closes every inherited descriptor in the child) | done, tested |
 | app | `src/app.*` | the modes, the command line, the window list, the bar, the transition in progress | done, tested |
 | main | `src/main.cpp` | options, the loop, the terminal modes (resets the frame schedule every frame, so a burst of keys cannot push later frames away) | done, e2e tested |
@@ -96,6 +97,39 @@ colour); the background as the alt colour (none for the default background, so t
 cell's `inv`; bold brightens palette colours 0 to 7 and is also the bold attribute; dim scales the colour; hidden is a space (with no
 attributes); italic, underline, strikethrough and blink are cell attributes that vtscreen sends to the terminal. A wide character is a
 `CELL_WIDE` cell and a `CELL_TAIL` cell (vtscreen draws the pair once and turns a torn pair into a blank, so slides and dissolves are safe).
+
+## Pictures (Sixel)
+
+vtmux asks the real terminal at start (vtpen: Sixel? the size of a cell?) and tells vtscreen (`set_image_support`) and every console (`Emulator::set_graphics`),
+so that what programs ask is answered truly (DA1 names Sixel only if the terminal has it, `CSI 14/16/18 t`, XTSMGRAPHICS, XTVERSION, and the
+pixel size in the pty's window size). Without Sixel outside, a picture is discarded and takes no room.
+
+The decisions (2026-11-27): pictures stay with their lines in the scrollback, within a budget of memory (64 MiB for a console, 4 bytes a pixel); the cursor
+ends below the picture, in the column it began (as xterm and the DEC terminals do); the decoder lives in vtscreen next to the encoder, and vtpen does not depend on vtscreen.
+
+- **Parser.** `ESC P params q data ST` reaches the emulator as `VtParserEvents::dcs` (any other DCS is skipped as before). Data over 32 MiB drops the picture.
+- **Decoder.** `vtscreen::sixel_decode(data, p2, Raster&, limits)`: 256 colour registers (the VT340's first 16), RGB and HLS, repeats, raster attributes
+  (size and aspect), P2 (transparent or background), limits of 4096 by 4096. Nothing drawn: false.
+- **Layer.** A picture is cut into tiles, one per cell (`Tile{image, col, row}`), in a second grid beside the cells (lazy: no memory until a picture is placed), one
+  line of tiles for each line of scrollback (empty when it has none), in step with `scrollback_` through a single `push_history`. Every site in the emulator that writes or
+  moves cells does the same to the tiles: a letter written over a cell clears its tile (both cells of a wide letter, and the other half of a broken one), erase clears,
+  insert and delete characters shift them with the cells, scrolls move them (and into the history), the alternate screen has its own, resize cuts them, a full reset clears both screens,
+  `ED 3` the history. A change of the cell size drops every picture (they were cut for the old cells).
+- **Placing.** Row by row, going down as a line feed does (inside the scroll region, scrolling into the history), cut off at the right edge; then the cursor goes one more row down,
+  in the column where the picture began. Mode 8452: no last line feed, the cursor stays on the last row, right of the picture. Mode 80 (DECSDM): from the top left, nothing scrolls,
+  cut off at the bottom, the cursor stays. (Mode 80 is built from the DEC documentation; xterm's source was not checked.) A picture too big for the budget is not kept but its room is taken.
+- **Budget.** The pictures are kept once however many tiles point at them. After one is added, when the total is over a quarter of the budget and has doubled since the last
+  clean-up (or is over the budget), the pictures no tile points to are forgotten; then, if still over, the oldest, and their tiles are cleared.
+- **Painter.** One `Raster` just big enough for the block of cells that have a tile, placed with `Picture::place_image`; a row of it is made again only when its tiles differ from
+  what it shows (a picture number is never used again, so equal tiles mean equal pixels). A raster that a copy of the Picture also holds (kept for a transition) is copied before it
+  is changed. The cursor is not drawn over pictures.
+- **Transitions.** `compose` moves a layer's placements with it (whole cells; the Display cuts what is outside the body); `blend`: crossfade uses vtscreen's `fade` (the pixels dissolve), dissolve
+  makes each cell's pixels follow its letter (needs the size of a cell), dip darkens them; sizes that differ lose them. `images_without` takes the box of the help card out of the placements.
+- **Tests.** `tests/pictures_tests.cpp` runs the same random stream into an emulator with pictures and one with letters in their place and compares tile for letter (history included);
+  `render_pictures_tests.cpp` compares the painter's pixels with the emulator's tiles, with fresh painters, copies and scrolled-back views; the transition and app tests use real shells; the
+  end-to-end test sends a Sixel picture to a pretend terminal that can and one that cannot.
+
+Not done: a stand-in made of letters for a terminal without Sixel, ReGIS, an answer to DECRQM for modes 80 and 8452, noticing a change of the font size while running.
 
 ## Not in the first version
 

@@ -35,7 +35,7 @@ wenn du es als root ausführst). `./install --system` legt es für alle nach `/u
 
 Dasselbe wie `./m` von Hand: `cmake -B build && cmake --build build`. `-DVTMUX_TESTS=OFF` überspringt das Bauen der Tests.
 
-    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]
+    vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--no-images] [--fps N] [-- command args ...]
 
 Ohne Befehl führt die erste Konsole deine Shell (`$SHELL`) aus. Programme darin laufen mit `TERM=xterm-256color`.
 
@@ -72,6 +72,42 @@ Cursor wird gezeichnet, sobald eine Konsole gelandet ist. Alles wird von der Uhr
   Dein Terminalprogramm hat dafür möglicherweise auch einen eigenen Schalter.
 - Einfügen geht als Einfügen durch (geklammert, wenn das Programm es verlangt hat).
 
+## Bilder (Sixel)
+
+Wenn dein Terminal Sixel-Bilder zeichnen kann, können Programme in einer Konsole sie so zeichnen wie im Terminal selbst, und die Bilder verhalten sich wie
+Text. (Ausprobiert mit Windows Terminal; jedes Terminal, das die beiden Fragen unten beantwortet, sollte gehen.)
+
+Beim Start fragt vtmux dein Terminal zweierlei: ob es Sixel zeichnen kann und wie viele Pixel eine Zeichenzelle groß ist. Die Frage stellt
+[vtpen](https://github.com/briefnotion/vtpen), bevor vtmux den Bildschirm übernimmt; das dauert einen Moment, höchstens eine Sekunde, wenn das Terminal nie
+antwortet, und was du in der Zeit tippst, geht nicht verloren. Den Konsolen wird dann die Wahrheit gesagt: Die Geräteattribute nennen Sixel nur, wenn das
+Terminal es kann, die Größen einer Zelle und des Fensters werden beantwortet (`CSI 14 t`, `16 t`, `18 t`; die Fenstergröße des Pseudo-Terminals trägt die Pixel auch),
+ebenso die Zahl der Farben und das größte Bild (256 Farben, 4096 mal 4096 Pixel), und `XTVERSION` sagt `vtmux`. Ein Programm, das zuerst nachsieht, wie es
+Sixel-Programme tun, macht dann das Richtige.
+
+Was ein Bild tut:
+
+- Es wird in Stücke geschnitten, eines für jede Zeichenzelle, die es bedeckt, und die Stücke bleiben bei ihren Zellen. Das Bild scrollt mit dem Text, geht mit
+  seinen Zeilen in den Verlauf und ist zu sehen, wenn du im Verlauf zurückblätterst.
+- Ein Buchstabe, der über eine Zelle geschrieben wird, nimmt das Bildstück dieser Zelle mit. Löschen sowie Einfügen und Entfernen von Zeichen und Zeilen löscht
+  oder verschiebt die Stücke mit den Zellen. Der alternative Bildschirm (vim, less) hat eigene Bilder. `ESC [ 3 J` löscht die im Verlauf, und ein vollständiger Reset (`reset`) die auf den Bildschirmen.
+- Nach einem Bild steht der Cursor in der Zeile darunter, in der Spalte, in der das Bild begann, und der Bildschirm scrollt, wenn nötig (wie bei xterm und den
+  DEC-Terminals). Ist Modus 8452 gesetzt, bleibt der Cursor in der letzten Zeile des Bildes, rechts daneben. Ist Modus 80 (DECSDM) gesetzt, beginnt das Bild oben
+  links auf dem Bildschirm, nichts scrollt, was nicht passt, wird abgeschnitten, und der Cursor bleibt, wo er war.
+- Bilder gehen mit ihrer Konsole durch die Übergänge: Ein Gleiten bewegt sie, eine Überblendung löst die Pixel auf, ein Dissolve wechselt die Pixel jeder Zelle
+  zusammen mit ihrem Buchstaben, und ein Dip dunkelt sie ab. Die Hilfekarte wird über ein Bild gezeichnet, das rundherum zu sehen bleibt.
+
+Grenzen:
+
+- Ein Bild kann 4096 mal 4096 Pixel und 256 Farben haben (Größeres wird abgeschnitten), sein Sixel-Text bis zu 32 MiB (mehr wird samt Bild verworfen).
+- Pro Konsole werden 64 MiB Bilder gehalten (4 Byte pro Pixel). Ist das voll, gehen zuerst Bilder, die nichts mehr zeigt, dann die ältesten, auch wenn sie im
+  Verlauf stehen. Ein Bild, das zu groß zum Behalten ist, wird nicht gezeigt, nimmt aber trotzdem seinen Platz auf dem Bildschirm ein.
+- Die Größe einer Zelle wird nur einmal gefragt, beim Start. Änderst du danach die Schriftgröße, starte vtmux neu.
+- Der Cursor wird nicht über ein Bild gezeichnet.
+
+Kann dein Terminal kein Sixel zeichnen, oder startest du `vtmux --no-images` (oder mit gesetztem `VTMUX_NO_IMAGES`, oder mit `--no-color`: ohne Farbe keine Bilder), wird
+den Programmen gesagt, dass es kein Sixel gibt, und ein trotzdem gesendetes Bild wird verworfen und nimmt keinen Platz ein. Genauso ist es, wenn vtmux ohne sein
+zweites Submodul vtpen gebaut wurde (`git clone --recursive` bringt es mit), das dann einfach nicht benutzt wird.
+
 ## Befehle (nach dem Doppelpunkt)
 
 | Befehl | bewirkt |
@@ -99,14 +135,18 @@ für eine Überblendung (`blend`), zeichnet die Leiste und zeigt das Ergebnis. E
 dann die Tasten so senden muss, wie das Programm sie erwartet, versetzt vtmux es in die Eingabemodi der angezeigten Konsole (Anwendungs-Cursortasten, geklammertes
 Einfügen, Maus, Fokus) und nimmt es beim Beenden wieder heraus.
 
+Ein Sixel-Bild wird in ein Stück pro Zeichenzelle geschnitten und in einer Bildebene neben dem Text gehalten (`src/pictures.h`), die allem folgt, was mit den
+Zellen geschieht; der Maler gibt die Stücke als Pixel an vtscreen weiter (`Picture::place_image`), und die Übergänge nehmen sie mit.
+
 ## Was noch nicht fertig ist
 
 - Fett, kursiv, unterstrichen, durchgestrichen und blinkend werden als die üblichen Codes an dein Terminal gesendet, und breite Zeichen (Chinesisch, Emoji) belegen zwei
   Spalten. Wie sie aussehen, oder ob sie überhaupt erscheinen (Blinken und Kursiv oft nicht), liegt am Terminalprogramm. Kombinierende Zeichen werden
   verworfen, und ein Buchstabe, den das Terminal in anderer Breite zeichnet als die Tabelle des Emulators, kann seltsam aussehen.
 - Kein Lösen und Wiederverbinden (es gibt keinen Server), keine geteilten Fenster, kein Kopiermodus (der Verlauf kann angesehen, aber nicht ausgewählt werden), keine Mausbefehle, keine Konfigurationsdatei.
-- Vom Emulator nicht unterstützt: Sixel, Zeilen doppelter Breite und doppelter Höhe (`ESC # 3` bis `6`; sie werden ignoriert), kombinierende Zeichen (sie werden
+- Vom Emulator nicht unterstützt: Zeilen doppelter Breite und doppelter Höhe (`ESC # 3` bis `6`; sie werden ignoriert), kombinierende Zeichen (sie werden
   verworfen). Die Umschaltung 80/132 Spalten (DECCOLM) funktioniert innerhalb des Fensterbereichs: siehe unten.
+- Bilder: Für ein Terminal, das kein Sixel zeigen kann, wird kein Ersatz gezeichnet, keine andere Grafiksprache (ReGIS) wird verstanden, und die Größe einer Zelle wird nur einmal gefragt, beim Start.
 
 ## Tests
 
@@ -115,6 +155,10 @@ Einfügen, Maus, Fokus) und nimmt es beim Beenden wieder heraus.
   Überblendungen, die Sitzungen (echte Programme auf echten Pseudo-Terminals) und die App (die Modi, Befehle und Überblendungen, gesteuert durch Bytes und eine erfundene Uhr). `ctest --test-dir build` führt dieselben Tests aus dem CMake-Build aus.
 - `tests/e2e/run.sh` führt das echte `vtmux` in einem Pseudo-Terminal mit echten Programmen darin aus (`less`, `vi`, `top`, `htop`, Ctrl-C und
   Ctrl-Z, Größenänderung, die Modusspiegelung, schnelles Wechseln, viel Ausgabe, CPU im Leerlauf) und liest den Bildschirm mit einem Terminal-Emulator zurück.
+- Die Bilder haben eigene Tests. `tests/pictures_tests.cpp` speist Zufallsströme in einen Emulator, der Bilder hält, und in einen zweiten, der an ihrer Stelle
+  Buchstaben hält, und prüft, dass mit den Stücken geschieht, was mit den Buchstaben geschieht (Überschreiben, Löschen, Scrollen, der Verlauf, der andere Bildschirm);
+  `tests/render_pictures_tests.cpp` prüft die Pixel, die der Maler an vtscreen gibt, gegen das, was der Emulator hält; die Übergänge und die Hilfekarte werden
+  ebenfalls mit Bildern getestet, und der Ende-zu-Ende-Test lässt ein Programm, das ein Sixel-Bild zeichnet, in einem nachgestellten Terminal laufen, das es kann, und in einem, das es nicht kann.
 - `tests/conformance/run.sh` füttert Tausende erzeugte Escape-Sequenz-Ströme, handgeschriebene Bildschirme und Aufzeichnungen echter Programme an
   den Emulator (`tools/vtdump.cpp`), tmux und pyte und vergleicht die Bildschirme. `tests/vt100_tests.cpp`, `vt102_tests.cpp` und `vt52_tests.cpp` legen
   das Verhalten der DEC-Terminals fest. Was dabei gefunden wurde, steht in `tests/conformance/FINDINGS.md`.
@@ -128,4 +172,4 @@ Einfügen, Maus, Fokus) und nimmt es beim Beenden wieder heraus.
 
 ## Lizenz
 
-GNU General Public License, Version 3 (siehe `LICENSE`). Die Bibliothek `vtscreen`, auf der es aufbaut, steht unter der MIT-Lizenz.
+GNU General Public License, Version 3 (siehe `LICENSE`). Die Bibliotheken `vtscreen`, auf der es aufbaut, und `vtpen` stehen unter der MIT-Lizenz.

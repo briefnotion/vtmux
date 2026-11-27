@@ -98,7 +98,89 @@ void paint_history_row(const Emulator& emu, vtscreen::Picture& pic, int row, int
     for (int c = cols; c < pic.cols; c++) pic.set(row, c, vtscreen::PicCell());
 }
 
+// The piece (tile.col, tile.row) of `src` as the pixels of a cell: dst at (x, y) gets cw x ch pixels. What the picture does not reach
+// (the edge of a picture that is not a whole number of cells) is left as it is: transparent.
+void copy_piece(vtscreen::Raster& dst, int x, int y, const vtscreen::Raster& src, const Tile& t, int cw, int ch) {
+    const int sx = (int)t.col * cw, sy = (int)t.row * ch;
+    const int n = std::min(cw, src.w - sx);
+    if (n <= 0) return;
+    for (int j = 0; j < ch && sy + j < src.h; j++) {
+        const vtscreen::Pixel* from = &src.at(sx, sy + j);
+        std::copy(from, from + n, &dst.at(x, y + j));
+    }
+}
+
 }  // namespace
+
+// Put the pictures of the emulator on `pic`: a Raster for the block of cells that have a piece of a picture in them (the cells shown: the
+// live screen, or the view scrolled back), kept from one paint to the next so that only the cells whose piece changed are drawn again.
+// A picture's pieces never change (a picture has one number for good), so a cell is the same when its tile is.
+void PanePainter::paint_pictures(const Emulator& emu, vtscreen::Picture& pic, int rows, int cols, size_t scroll_back) {
+    const int cw = emu.cell_pixel_width(), ch = emu.cell_pixel_height();
+    const size_t history = emu.scrollback_size();
+    const size_t top = history - scroll_back;                // (scroll_back is held to the history)
+    auto tile_at = [&](int r, int c) -> Tile {
+        if (scroll_back == 0) return emu.picture_tile(r, c);
+        const size_t line = top + (size_t)r;
+        if (line >= history) return emu.picture_tile((int)(line - history), c);
+        const std::vector<Tile>& v = emu.scrollback_tiles(line);
+        return (size_t)c < v.size() ? v[(size_t)c] : Tile();
+    };
+
+    // the block of cells that have a piece
+    int r0 = rows, r1 = -1, c0 = cols, c1 = -1;
+    if (cw > 0 && ch > 0 && (scroll_back > 0 || emu.has_pictures())) {
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                if (!tile_at(r, c).empty()) { r0 = std::min(r0, r); r1 = std::max(r1, r); c0 = std::min(c0, c); c1 = std::max(c1, c); }
+    }
+    if (r1 < 0) {                                            // none
+        if (raster_ || !pic.images.empty()) pic.clear_images();
+        raster_.reset();
+        pic_rows_ = pic_cols_ = 0;
+        pic_tiles_.clear();
+        return;
+    }
+
+    const int brows = r1 - r0 + 1, bcols = c1 - c0 + 1;
+    const bool same_block = raster_ && brows == pic_rows_ && bcols == pic_cols_ && r0 == pic_row0_ && c0 == pic_col0_ && cw == pic_cw_ && ch == pic_ch_;
+    if (!same_block) {
+        raster_ = std::make_shared<vtscreen::Raster>();
+        raster_->init(bcols * cw, brows * ch);
+        pic_row0_ = r0; pic_col0_ = c0; pic_rows_ = brows; pic_cols_ = bcols; pic_cw_ = cw; pic_ch_ = ch;
+        pic_tiles_.assign((size_t)brows * bcols, Tile());
+    }
+
+    std::vector<int> changed;                                // the rows whose pieces are not what the raster shows
+    for (int r = 0; r < brows; r++) {
+        bool differs = false;
+        for (int c = 0; c < bcols && !differs; c++) differs = tile_at(r0 + r, c0 + c) != pic_tiles_[(size_t)r * bcols + c];
+        if (differs) changed.push_back(r);
+    }
+    if (!changed.empty() && raster_.use_count() > 2) {
+        // somebody else holds this raster (a copy of the picture kept for a transition, or one being drawn): what they hold must not change under them
+        raster_ = std::make_shared<vtscreen::Raster>(*raster_);
+    }
+
+    for (const int r : changed) {
+        for (int j = 0; j < ch; j++) std::fill(&raster_->at(0, r * ch + j), &raster_->at(0, r * ch + j) + (size_t)bcols * cw, vtscreen::Pixel());
+        std::shared_ptr<const vtscreen::Raster> src;
+        uint32_t src_id = 0;
+        for (int c = 0; c < bcols; c++) {
+            const Tile t = tile_at(r0 + r, c0 + c);
+            pic_tiles_[(size_t)r * bcols + c] = t;
+            if (t.empty()) continue;
+            if (t.image != src_id) { src = emu.picture(t.image); src_id = t.image; }
+            if (src) copy_piece(*raster_, c * cw, r * ch, *src, t, cw, ch);
+        }
+    }
+
+    // it is what the picture carries, and the only thing
+    if (pic.images.size() != 1 || pic.images[0].raster.get() != raster_.get()) {   // (the block is the same whenever the raster is)
+        pic.clear_images();
+        pic.place_image(raster_, r0, c0);
+    }
+}
 
 int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, const Theme& theme, size_t scroll_back) {
     // The emulator's rows are the picture's rows but the last (the bar's). If the picture is not that shape, paint the part
@@ -111,6 +193,7 @@ int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, 
     if (scroll_back > 0) {                                   // browsing the history: every row, no cursor (a Picture notes only real changes)
         const size_t top = emu.scrollback_size() - scroll_back;
         for (int r = 0; r < rows; r++) paint_history_row(emu, pic, r, cols, top + (size_t)r, reverse_screen, theme);
+        paint_pictures(emu, pic, rows, cols, scroll_back);
         emu.clear_dirty();
         all_ = true;                                         // coming back to the live screen is a full paint
         last_scroll_back_ = scroll_back;
@@ -138,6 +221,7 @@ int PanePainter::paint(Emulator& emu, vtscreen::Picture& pic, bool show_cursor, 
         written++;
     }
 
+    paint_pictures(emu, pic, rows, cols, 0);
     emu.clear_dirty();
     all_ = false;
     last_scroll_back_ = 0;

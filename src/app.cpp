@@ -93,6 +93,7 @@ bool App::new_window(const std::vector<std::string>& command, const std::string&
     Window w;
     w.id = next_id_++;
     w.session = std::make_unique<Session>(std::max(rows_ - 1, 1), cols_, command, 2000);
+    w.session->set_graphics(options_.outer.cell_w, options_.outer.cell_h, options_.outer.sixel);
     if (!w.session->start(error)) return false;
     if (!name.empty()) w.name = name;
     else if (!command.empty()) w.name = base_name(command[0]);
@@ -570,10 +571,14 @@ void App::draw_help(const vtscreen::Picture& base, vtscreen::Picture& out) {
     out.retained = false;
     out.rows = base.rows; out.cols = base.cols;
     out.cell = base.cell;
+    out.images = base.images;
+    out.fade_level = base.fade_level;
     out.touch_all();
     const int body = base.rows - 1;
     const CardBox box = card_box(std::max(body, 1), base.cols);
     if (box.width < 8 || box.height < 3 || body < 3) return;                // too small for a card: the bar says what to do
+    // the pictures made of pixels show round the card, not through it
+    out.images = images_without(base, box.top, box.left, box.height, box.width, options_.outer.cell_w, options_.outer.cell_h);
 
     const bool color = options_.theme.color;
     const int text_w = box.width - 4, inner_rows = box.height - 2;
@@ -745,7 +750,7 @@ const vtscreen::Picture& App::frame_base(double now) {
         from = &f->pic;
     }
     if (!from || from->rows != act.pic.rows || from->cols != act.pic.cols) return act.pic;
-    blend(*from, act.pic, pct, options_.style, mixed_);
+    blend(*from, act.pic, pct, options_.style, mixed_, options_.outer.cell_w, options_.outer.cell_h);
     return mixed_;
 }
 

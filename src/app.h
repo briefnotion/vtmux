@@ -23,6 +23,13 @@ enum class Mode {
     Help,             // the help card is over the console; arrows scroll it, Enter or Space closes it
 };
 
+// What the real terminal vtmux runs in is known to be able to do (found out at start-up): the size of one of its cells in pixels, and whether
+// it can draw Sixel pictures. 0 and false when it is not known or not so; everything then works as it did before pictures.
+struct OuterTerminal {
+    int cell_w = 0, cell_h = 0;
+    bool sixel = false;
+};
+
 struct AppOptions {
     std::vector<std::string> first_command;      // what the first console runs (empty: the shell)
     TransitionStyle style = TransitionStyle::Slide;
@@ -31,6 +38,7 @@ struct AppOptions {
     int void_color[3] = {16, 18, 30};            // the empty space while a console is opening or closing
     bool void_on = true;
     char prefix = 0x02;                          // Ctrl-B
+    OuterTerminal outer = OuterTerminal();       // what the real terminal can do (last, with an initializer, so the earlier ones can still be listed in order)
 };
 
 class App {

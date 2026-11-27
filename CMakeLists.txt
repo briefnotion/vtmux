@@ -28,6 +28,12 @@ set(VTMUX_SOURCES src/vtparser.cpp src/emulator.cpp src/width.cpp src/keys.cpp s
 
 add_executable(vtmux src/main.cpp ${VTMUX_SOURCES})
 target_include_directories(vtmux PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# vtpen (a second submodule) lets vtmux ask the real terminal what it can do (Sixel, the size of a cell). Without it vtmux works as before.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vtpen/include/vtpen_probe_posix.h")
+    target_include_directories(vtmux PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vtpen/include")
+else()
+    message(STATUS "vtpen is missing: vtmux will not ask the terminal what it can do (git submodule update --init)")
+endif()
 target_link_libraries(vtmux PRIVATE Threads::Threads util)
 
 # Tests: every tests/*_tests.cpp names the sources it needs on a line "// sources: ../src/a.cpp ../src/b.cpp".

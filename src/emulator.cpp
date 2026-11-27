@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "../vtscreen/vtscreen.h"
 #include "width.h"
 
 namespace vtmux {
@@ -47,6 +48,7 @@ Emulator::Emulator(int rows, int cols, size_t scrollback_lines) : scrollback_lim
     pane_cols_ = cols_;
     main_.assign((size_t)rows_ * cols_, Cell());
     alt_.assign((size_t)rows_ * cols_, Cell());
+    pictures_.set_size(rows_, cols_);
     dirty_.assign((size_t)rows_, 1);
     scroll_top_ = 0;
     scroll_bottom_ = rows_ - 1;
@@ -84,18 +86,19 @@ Cell Emulator::blank() const {
 void Emulator::fix_wide_at(int row, int col) {
     if (col < 0 || col >= cols_) return;
     const uint16_t a = at(row, col).attrs;
-    if ((a & ATTR_WIDE) && col + 1 < cols_) at(row, col + 1) = blank();
-    if ((a & ATTR_WIDE_TAIL) && col > 0) at(row, col - 1) = blank();
+    if ((a & ATTR_WIDE) && col + 1 < cols_) { at(row, col + 1) = blank(); clear_tiles(row, col + 1, col + 2); }
+    if ((a & ATTR_WIDE_TAIL) && col > 0) { at(row, col - 1) = blank(); clear_tiles(row, col - 1, col); }
 }
 
 // Make room for n cells at col by shifting the rest of the row right: a wide character that would be cut by the gap is
 // blanked (both halves), and one pushed to the last column with its second half off the edge is blanked too.
 void Emulator::open_gap(int row, int col, int n) {
     if (n <= 0 || col >= cols_) return;
-    if (col > 0 && (at(row, col).attrs & ATTR_WIDE_TAIL)) { at(row, col - 1) = blank(); at(row, col) = blank(); }
+    if (col > 0 && (at(row, col).attrs & ATTR_WIDE_TAIL)) { at(row, col - 1) = blank(); at(row, col) = blank(); clear_tiles(row, col - 1, col + 1); }
     for (int c = cols_ - 1; c >= col + n; c--) at(row, c) = at(row, c - n);
     for (int c = col; c < std::min(col + n, cols_); c++) at(row, c) = blank();
-    if (at(row, cols_ - 1).attrs & ATTR_WIDE) at(row, cols_ - 1) = blank();
+    pictures_.shift_right(use_alt_ ? 1 : 0, row, col, n);                                       // (the pieces move with their cells)
+    if (at(row, cols_ - 1).attrs & ATTR_WIDE) { at(row, cols_ - 1) = blank(); clear_tiles(row, cols_ - 1, cols_); }
     mark_dirty(row);
 }
 
@@ -103,8 +106,9 @@ void Emulator::open_gap(int row, int col, int n) {
 void Emulator::close_gap(int row, int col, int n) {
     n = std::min(n, cols_ - col);
     if (n <= 0) return;
-    if (col > 0 && (at(row, col).attrs & ATTR_WIDE_TAIL)) at(row, col - 1) = blank();           // its first half is outside, and stays
-    if (col + n < cols_ && (at(row, col + n).attrs & ATTR_WIDE_TAIL)) at(row, col + n) = blank();   // its first half is deleted
+    if (col > 0 && (at(row, col).attrs & ATTR_WIDE_TAIL)) { at(row, col - 1) = blank(); clear_tiles(row, col - 1, col); }           // its first half is outside, and stays
+    if (col + n < cols_ && (at(row, col + n).attrs & ATTR_WIDE_TAIL)) { at(row, col + n) = blank(); clear_tiles(row, col + n, col + n + 1); }   // its first half is deleted
+    pictures_.shift_left(use_alt_ ? 1 : 0, row, col, n);
     for (int c = col; c + n < cols_; c++) at(row, c) = at(row, c + n);
     const Cell b = blank();
     for (int c = cols_ - n; c < cols_; c++) at(row, c) = b;
@@ -115,26 +119,34 @@ void Emulator::erase_cells(int row, int from, int to) {
     from = std::max(from, 0);
     to = std::min(to, cols_);
     if (from >= to) return;
-    if (from > 0 && (at(row, from).attrs & ATTR_WIDE_TAIL)) at(row, from - 1) = blank();
-    if (to < cols_ && (at(row, to - 1).attrs & ATTR_WIDE)) at(row, to) = blank();
+    int lo = from, hi = to;                                      // (the pieces go with the cells, and with the other half of a wide character)
+    if (from > 0 && (at(row, from).attrs & ATTR_WIDE_TAIL)) { at(row, from - 1) = blank(); lo = from - 1; }
+    if (to < cols_ && (at(row, to - 1).attrs & ATTR_WIDE)) { at(row, to) = blank(); hi = to + 1; }
     const Cell b = blank();
     for (int c = from; c < to; c++) at(row, c) = b;
+    clear_tiles(row, lo, hi);
     mark_dirty(row);
 }
 
 void Emulator::erase_rows(int from, int to) {
     for (int r = std::max(from, 0); r < std::min(to, rows_); r++) erase_cells(r, 0, cols_);
+    if (from <= 0 && to >= rows_) pictures_.clear_screen(use_alt_ ? 1 : 0);                   // the whole screen: nothing is left of the pictures, give the memory back
+}
+
+// A line leaves the top of the screen for the scrollback (the oldest goes when it is full), and takes its pieces of pictures.
+void Emulator::push_history(const Cell* line_begin, int screen, int row) {
+    scrollback_.emplace_back(line_begin, line_begin + cols_);
+    pictures_.push_history(screen, row);
+    if (scrollback_.size() > scrollback_limit_) { scrollback_.pop_front(); pictures_.pop_history(); }
 }
 
 void Emulator::scroll_up(int top, int bottom, int n, bool keep_history) {
     n = std::min(n, bottom - top + 1);
     if (n <= 0) return;
     if (keep_history && !use_alt_ && top == 0 && scrollback_limit_ > 0) {     // lines leave through the top of the main screen: keep them (as tmux and xterm do, with or without a bottom margin)
-        for (int r = 0; r < n; r++) {
-            scrollback_.emplace_back(main_.begin() + (size_t)r * cols_, main_.begin() + (size_t)(r + 1) * cols_);
-            if (scrollback_.size() > scrollback_limit_) scrollback_.pop_front();
-        }
+        for (int r = 0; r < n; r++) push_history(&main_[(size_t)r * cols_], 0, r);
     }
+    pictures_.scroll_up(use_alt_ ? 1 : 0, top, bottom, n);
     std::vector<Cell>& g = screen();
     std::move(g.begin() + (size_t)(top + n) * cols_, g.begin() + (size_t)(bottom + 1) * cols_, g.begin() + (size_t)top * cols_);
     const Cell b = blank();
@@ -145,6 +157,7 @@ void Emulator::scroll_up(int top, int bottom, int n, bool keep_history) {
 void Emulator::scroll_down(int top, int bottom, int n) {
     n = std::min(n, bottom - top + 1);
     if (n <= 0) return;
+    pictures_.scroll_down(use_alt_ ? 1 : 0, top, bottom, n);
     std::vector<Cell>& g = screen();
     std::move_backward(g.begin() + (size_t)top * cols_, g.begin() + (size_t)(bottom + 1 - n) * cols_, g.begin() + (size_t)(bottom + 1) * cols_);
     const Cell b = blank();
@@ -240,6 +253,7 @@ void Emulator::put_char(char32_t cp) {
     Cell c;
     c.ch = cp; c.fg = pen_fg_; c.bg = pen_bg_; c.attrs = (uint16_t)(pen_attrs_ | (w == 2 ? ATTR_WIDE : 0));
     at(row, col) = c;
+    clear_tiles(row, col, col + w);                              // a letter over a cell wipes that cell's piece of a picture
     if (w == 2) {
         Cell tail;
         tail.fg = pen_fg_; tail.bg = pen_bg_; tail.attrs = (uint16_t)(pen_attrs_ | ATTR_WIDE_TAIL);
@@ -318,6 +332,70 @@ void Emulator::osc(std::string_view text) {
     }
 }
 
+// ------------------------------------------------------------------------------------------------ Sixel pictures
+
+void Emulator::set_graphics(int cell_w, int cell_h, bool sixel) {
+    const int w = cell_w > 0 && cell_h > 0 ? cell_w : 0;
+    const int h = w > 0 ? cell_h : 0;
+    if (w != cell_w_ || h != cell_h_) {                          // the pieces were cut to the old cells: they do not fit any more
+        pictures_.clear_all();
+        mark_all_dirty();
+    }
+    cell_w_ = w;
+    cell_h_ = h;
+    sixel_ = sixel && w > 0;
+}
+
+// ESC P params q data ESC \ : a Sixel picture. With Sixel off (the real terminal could not show it) it is discarded.
+void Emulator::dcs(const Params& p, char marker, std::string_view inter, char final, std::string_view data) {
+    if (final != 'q' || marker != 0 || !inter.empty() || !sixel_) return;
+    vtscreen::SixelLimits limits;
+    limits.max_width = SIXEL_MAX_WIDTH;
+    limits.max_height = SIXEL_MAX_HEIGHT;
+    limits.colours = SIXEL_COLOURS;
+    auto raster = std::make_shared<vtscreen::Raster>();
+    if (!vtscreen::sixel_decode(data, p.get(1, 0), *raster, limits)) return;           // nothing to draw: nothing happens
+    place_picture(std::move(raster));
+}
+
+// Cut the picture into tiles, one for each cell, and put them where the cursor is, a row of cells at a time, going down as a
+// line feed does (so the screen scrolls, and what scrolls off the top goes into the scrollback, with its pieces). Afterwards the
+// cursor is on the row below the picture, in the column the picture began (as xterm and the DEC terminals do), or, with mode
+// 8452, on the last row of it, right of it. With mode 80 (DECSDM) the picture starts at the top left, nothing scrolls, what does
+// not fit is cut off, and the cursor stays. A picture that cannot be kept (bigger than the whole budget) is not shown, but its
+// place on the screen is still taken, so that what the program lays out below it is where it expects.
+void Emulator::place_picture(std::shared_ptr<const vtscreen::Raster> raster) {
+    const size_t w = (size_t)raster->w, h = (size_t)raster->h;
+    const int tiles_w = (int)((w + (size_t)cell_w_ - 1) / (size_t)cell_w_);
+    const int tiles_h = (int)((h + (size_t)cell_h_ - 1) / (size_t)cell_h_);
+    const uint32_t id = pictures_.add(std::move(raster), w * h * sizeof(vtscreen::Pixel));
+    const int screen = use_alt_ ? 1 : 0;
+
+    if (sixel_display_mode_) {                                   // (the cursor is not touched: a pending wrap stays pending)
+        for (int tr = 0; tr < tiles_h && tr < rows_; tr++) {
+            for (int tc = 0; tc < tiles_w && tc < cols_; tc++) {
+                if (id) pictures_.put(screen, tr, tc, Tile{id, (uint16_t)tc, (uint16_t)tr});
+                else pictures_.clear(screen, tr, tc, tc + 1);
+            }
+            mark_dirty(tr);
+        }
+        return;
+    }
+
+    wrap_pending_ = false;
+    const int col0 = cursor_.col;
+    for (int tr = 0; tr < tiles_h; tr++) {
+        const int row = cursor_.row;
+        for (int tc = 0; tc < tiles_w && col0 + tc < cols_; tc++) {
+            if (id) pictures_.put(screen, row, col0 + tc, Tile{id, (uint16_t)tc, (uint16_t)tr});
+            else pictures_.clear(screen, row, col0 + tc, col0 + tc + 1);
+        }
+        mark_dirty(row);
+        if (tr + 1 < tiles_h || !sixel_cursor_right_) linefeed();
+    }
+    if (sixel_cursor_right_) cursor_.col = std::min(col0 + tiles_w, cols_ - 1);
+}
+
 void Emulator::vt52_escape(char final) {
     wrap_pending_ = false;
     switch (final) {
@@ -350,7 +428,7 @@ void Emulator::esc(std::string_view inter, char final) {
             case 'E': carriage_return(); linefeed(); break;      // NEL
             case 'M': reverse_index(); break;                    // RI
             case 'H': tab_stops_[(size_t)cursor_.col] = 1; break;                 // HTS
-            case 'Z': reply_ += "\x1b[?1;2c"; break;             // DECID: the same answer as device attributes
+            case 'Z': reply_ += device_attributes(); break;      // DECID: the same answer as device attributes
             case 'c': full_reset(); break;                       // RIS
             case '=': app_keypad_ = true; break;
             case '>': app_keypad_ = false; break;
@@ -373,6 +451,7 @@ void Emulator::esc(std::string_view inter, char final) {
             for (int c = 0; c < cols_; c++) { Cell e; e.ch = U'E'; at(r, c) = e; }
             mark_dirty(r);
         }
+        pictures_.clear_screen(use_alt_ ? 1 : 0);                // every cell was written
         move_to(0, 0);
     }
 }
@@ -449,6 +528,7 @@ void Emulator::use_alt(bool on, bool clear) {
     if (on && clear) {
         const Cell b = Cell();
         std::fill(alt_.begin(), alt_.end(), b);
+        pictures_.clear_screen(1);
     }
     mark_all_dirty();
 }
@@ -489,6 +569,8 @@ void Emulator::set_private_mode(int mode, bool on) {
         case 1006: mouse_sgr_ = on; break;
         case 2004: bracketed_paste_ = on; break;
         case 66: app_keypad_ = on; break;
+        case 80: sixel_display_mode_ = on; break;                // DECSDM: pictures start at the top left and do not scroll
+        case 8452: sixel_cursor_right_ = on; break;              // the cursor stays by the last row of a picture, to its right
         default: break;                                          // the rest (blink, 132 columns, sync ...) change nothing here
     }
 }
@@ -514,6 +596,38 @@ void Emulator::clear_screen_home() {
     scroll_top_ = 0; scroll_bottom_ = rows_ - 1;
     erase_rows(0, rows_);
     move_to(0, 0);
+}
+
+std::string Emulator::device_attributes() const {
+    return sixel_ ? "\x1b[?1;2;4c" : "\x1b[?1;2c";             // (4 is Sixel graphics)
+}
+
+// XTWINOPS: the questions. 14: the text area in pixels, 16: one cell in pixels, 18: the text area in cells. The pixel ones are only
+// answered when the real terminal's cell size is known (guessing would tell a program something false). The requests to move or
+// resize the window are not carried out: a program in a console does not get to do that to the real terminal.
+void Emulator::window_op(const Params& p) {
+    switch (p.get(0, 0)) {
+        case 14:
+            if (cell_w_ > 0) reply_ += "\x1b[4;" + std::to_string(rows_ * cell_h_) + ";" + std::to_string(cols_ * cell_w_) + "t";
+            break;
+        case 16:
+            if (cell_w_ > 0) reply_ += "\x1b[6;" + std::to_string(cell_h_) + ";" + std::to_string(cell_w_) + "t";
+            break;
+        case 18: reply_ += "\x1b[8;" + std::to_string(rows_) + ";" + std::to_string(cols_) + "t"; break;
+        default: break;
+    }
+}
+
+// XTSMGRAPHICS. Item 1 is the number of colours in a picture, item 2 the biggest picture. Reading (1), resetting (2) and reading the
+// biggest (4) all give the same answer (there is only one setting); setting one (3) is refused. Only answered when Sixel is on.
+void Emulator::graphics_attributes(const Params& p) {
+    if (!sixel_) return;
+    const int item = p.get(0, 0), action = p.get(1, 0);
+    if (item != 1 && item != 2) { reply_ += "\x1b[?" + std::to_string(item) + ";1S"; return; }       // not an item we know
+    if (action < 1 || action > 4) { reply_ += "\x1b[?" + std::to_string(item) + ";2S"; return; }     // not an action we know
+    if (action == 3) { reply_ += "\x1b[?" + std::to_string(item) + ";3S"; return; }                   // setting: refused
+    if (item == 1) reply_ += "\x1b[?1;0;" + std::to_string(SIXEL_COLOURS) + "S";
+    else reply_ += "\x1b[?2;0;" + std::to_string(SIXEL_MAX_WIDTH) + ";" + std::to_string(SIXEL_MAX_HEIGHT) + "S";
 }
 
 void Emulator::device_status(const Params& p, char marker) {
@@ -552,6 +666,9 @@ void Emulator::full_reset() {
     use_alt_ = false;
     std::fill(main_.begin(), main_.end(), Cell());
     std::fill(alt_.begin(), alt_.end(), Cell());
+    pictures_.clear_screen(0);
+    pictures_.clear_screen(1);
+    sixel_display_mode_ = false; sixel_cursor_right_ = false;
     auto_wrap_ = true; newline_mode_ = false; bracketed_paste_ = false; focus_reporting_ = false; reverse_video_ = false;
     reverse_wrap_ = false; mouse_tracking_ = 0; mouse_sgr_ = false;
     allow_deccolm_ = false;
@@ -570,12 +687,14 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
     }
     if (marker == '>') {
         if (final == 'c') reply_ += "\x1b[>0;0;0c";                                                                   // secondary device attributes
+        else if (final == 'q' && p.get(0, 0) == 0) reply_ += "\x1bP>|vtmux\x1b\\";                                    // XTVERSION: what we are called
         return;
     }
     if (marker == '<' || marker == '=') return;
     if (marker == '?') {
         if (final == 'h' || final == 'l') set_mode(p, true, final == 'h');
         else if (final == 'n') device_status(p, '?');
+        else if (final == 'S') graphics_attributes(p);
         else if (final == 'J') csi(p, 0, inter, 'J');                                                                // DECSED: as ED
         else if (final == 'K') csi(p, 0, inter, 'K');
         return;
@@ -602,7 +721,7 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
             if (what == 0) { erase_cells(cursor_.row, cursor_.col, cols_); erase_rows(cursor_.row + 1, rows_); }
             else if (what == 1) { erase_rows(0, cursor_.row); erase_cells(cursor_.row, 0, cursor_.col + 1); }
             else if (what == 2) erase_rows(0, rows_);
-            else if (what == 3) scrollback_.clear();
+            else if (what == 3) { scrollback_.clear(); pictures_.clear_history(); }
             break;
         }
         case 'K': {                                                                                                   // EL
@@ -628,7 +747,8 @@ void Emulator::csi(const Params& p, char marker, std::string_view inter, char fi
         case 'b':                                                                                                     // REP
             if (last_printed_) for (int i = 0; i < std::min(n1, 65535); i++) put_char(last_printed_);
             break;
-        case 'c': if (p.get(0, 0) == 0) reply_ += "\x1b[?1;2c"; break;                                                // device attributes
+        case 'c': if (p.get(0, 0) == 0) reply_ += device_attributes(); break;                                         // device attributes
+        case 't': window_op(p); break;                                                                                // the questions about sizes
         case 'x':                                                                                                     // DECREQTPARM: the terminal parameters
             if (p.get(0, 0) == 0) reply_ += "\x1b[2;1;1;112;112;1;0x";
             else if (p.get(0, 0) == 1) reply_ += "\x1b[3;1;1;112;112;1;0x";
@@ -669,42 +789,41 @@ void Emulator::resize_to(int rows, int cols) {
 
     // If the cursor would be below the new bottom, the lines above it scroll up and off (into the scrollback of the
     // main screen) so that it stays where it is on the screen.
-    auto shift_up = [&](std::vector<Cell>& grid, int shift, bool keep_history) {
+    auto shift_up = [&](std::vector<Cell>& grid, int screen, int shift, bool keep_history) {
         if (shift <= 0) return;
         shift = std::min(shift, rows_);
         if (keep_history && scrollback_limit_ > 0) {
-            for (int r = 0; r < shift; r++) {
-                scrollback_.emplace_back(grid.begin() + (size_t)r * cols_, grid.begin() + (size_t)(r + 1) * cols_);
-                if (scrollback_.size() > scrollback_limit_) scrollback_.pop_front();
-            }
+            for (int r = 0; r < shift; r++) push_history(&grid[(size_t)r * cols_], screen, r);
         }
+        pictures_.scroll_up(screen, 0, rows_ - 1, shift);
         std::move(grid.begin() + (size_t)shift * cols_, grid.end(), grid.begin());
         std::fill(grid.end() - (ptrdiff_t)((size_t)shift * cols_), grid.end(), Cell());
     };
     const int main_cursor_row = use_alt_ ? saved_1049_.row : cursor_.row;
     const int main_shift = main_cursor_row - (rows - 1);
-    shift_up(main_, main_shift, true);
+    shift_up(main_, 0, main_shift, true);
     if (use_alt_) {
-        shift_up(alt_, cursor_.row - (rows - 1), false);
+        shift_up(alt_, 1, cursor_.row - (rows - 1), false);
         cursor_.row -= std::max(0, cursor_.row - (rows - 1));
         saved_1049_.row -= std::max(0, main_shift);
     } else {
         cursor_.row -= std::max(0, main_shift);
     }
 
-    auto reshape = [&](std::vector<Cell>& grid) {
+    pictures_.reshape(rows, cols);                               // (the cut edge below clears the piece of a wide character it breaks)
+    auto reshape = [&](std::vector<Cell>& grid, int screen) {
         std::vector<Cell> next((size_t)rows * cols, Cell());
         for (int r = 0; r < std::min(rows, rows_); r++)
             for (int c = 0; c < std::min(cols, cols_); c++) next[(size_t)r * cols + c] = grid[(size_t)r * cols_ + c];
         // a wide character cut by the new edge leaves half of itself: blank it
         for (int r = 0; r < rows; r++) {
             Cell& last = next[(size_t)r * cols + cols - 1];
-            if (last.attrs & ATTR_WIDE) last = Cell();
+            if (last.attrs & ATTR_WIDE) { last = Cell(); pictures_.clear(screen, r, cols - 1, cols); }
         }
         grid.swap(next);
     };
-    reshape(main_);
-    reshape(alt_);
+    reshape(main_, 0);
+    reshape(alt_, 1);
 
     rows_ = rows; cols_ = cols;
     dirty_.assign((size_t)rows_, 1);

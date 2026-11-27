@@ -24,11 +24,24 @@ struct Log : VtParserEvents {
     }
     void esc(std::string_view inter, char final) override { out << "esc[" << inter << "|" << final << "] "; }
     void osc(std::string_view s) override { out << "osc[" << s << "] "; }
+    void dcs(const Params& p, char marker, std::string_view inter, char final, std::string_view data) override {
+        out << "dcs[";
+        if (marker) out << marker;
+        for (size_t i = 0; i < p.size(); i++) out << (i ? ";" : "") << p.value[i];
+        out << "|" << inter << "|" << final << "|" << data << "] ";
+    }
     std::string str() const { return out.str(); }
 };
 
 std::string run(const std::string& bytes) {
     VtParser p; Log log;
+    p.feed(bytes, log);
+    return log.str();
+}
+
+std::string run_limited(const std::string& bytes, size_t limit) {
+    VtParser p; Log log;
+    p.set_max_dcs_string(limit);
     p.feed(bytes, log);
     return log.str();
 }
@@ -154,10 +167,55 @@ int main() {
         CHECK(run("\x1b]52;c;" + text + "\x1b\\").rfind("osc[52;c;QQQQ", 0) == 0);      // ST ends it too
     }
 
+    // ---- Sixel (ESC P params q data ST): the data is passed on; every other device control string is still skipped
+    CHECK_EQ(run("\x1bPq#0;2;0;0;0~-~\x1b\\" "z"), std::string("dcs[||q|#0;2;0;0;0~-~] p122 "));
+    CHECK_EQ(run("\x1bP0;1;0q~\x1b\\"), std::string("dcs[0;1;0||q|~] "));
+    CHECK_EQ(run("\x1bP;1q~\x1b\\"), std::string("dcs[-1;1||q|~] "));                // an empty first parameter is "default"
+    CHECK_EQ(run("\x1bP9q\x1b\\"), std::string("dcs[9||q|] "));                        // no data at all is still a picture of nothing
+    CHECK_EQ(run("\x1bPq~\x1b\\" "\x1bPq??\x1b\\"), std::string("dcs[||q|~] dcs[||q|??] "));
+    CHECK_EQ(run("\x1bP1;2|data\x1b\\" "z"), std::string("p122 "));                     // other finals: skipped
+    CHECK_EQ(run("\x1bP+q4d73\x1b\\" "z"), std::string("p122 "));                       // an intermediate byte makes it another string (XTGETTCAP)
+    CHECK_EQ(run("\x1bP$qm\x1b\\" "z"), std::string("p122 "));                          // DECRQSS
+    CHECK_EQ(run("\x1bP?1q~\x1b\\" "z"), std::string("p122 "));                         // a marker too
+    CHECK_EQ(run("\x1bP1?1q~\x1b\\" "z"), std::string("p122 "));                        // a marker in the middle
+    CHECK_EQ(run("\x1bP1$1q~\x1b\\" "z"), std::string("p122 "));                        // a digit after an intermediate
+    CHECK_EQ(run("\x1bPq~\x1b[A"), std::string("csi[||A] "));                             // an ESC that is not ST abandons it, with no picture
+    CHECK_EQ(run("\x1bPq~\x18" "y"), std::string("p121 "));                               // CAN
+    CHECK_EQ(run("\x1bPq~\x1a" "y"), std::string("p121 "));                               // SUB
+    CHECK_EQ(run("\x1bPq~\x07" "y\x1b\\"), std::string("dcs[||q|~\x07y] "));            // BEL does not end a DCS: it is data
+    CHECK_EQ(run("\x1bPq\x1b\\\x1bPq\x1b\\"), std::string("dcs[||q|] dcs[||q|] "));
+    CHECK_EQ(run("\x1bPq~\x1bPq?\x1b\\"), std::string("dcs[||q|?] "));                 // a new DCS starts over (the old one is dropped)
+    CHECK_EQ(run("\x1bP1q~\x1b\\\x1b[2;3H"), std::string("dcs[1||q|~] csi[2;3||H] ")); // parameters do not leak into the next sequence
+    CHECK_EQ(run("\x1b[5;6\x1bPq~\x1b\\" "\x1b[A"), std::string("dcs[||q|~] csi[||A] "));
+    CHECK_EQ(run("\x1bP" + std::string(20, '1') + ";" + std::string(40, '2') + "q~\x1b\\").substr(0, 4), std::string("dcs["));   // silly parameters are fine
+    {   // the limit: data over it is dropped with the picture, and what follows is fine
+        CHECK_EQ(run_limited("\x1bPq" + std::string(10, '~') + "\x1b\\" "k", 10), std::string("dcs[||q|~~~~~~~~~~] p107 "));    // exactly the limit
+        CHECK_EQ(run_limited("\x1bPq" + std::string(11, '~') + "\x1b\\" "k", 10), std::string("p107 "));                        // one over
+        CHECK_EQ(run_limited("\x1bPq" + std::string(5000, '~') + "\x1b\\" "\x1bPq~\x1b\\", 10), std::string("dcs[||q|~] "));  // the next one is whole
+    }
+    {   // a big picture goes through whole (more than the old string limit)
+        const std::string big(VtParser::MAX_STRING * 4, '~');
+        const std::string got = run("\x1bPq" + big + "\x1b\\");
+        CHECK(got.size() == std::string("dcs[||q|] ").size() + big.size());
+    }
+    {   // split anywhere: the same events whole, a byte at a time, or in random pieces
+        const std::string pics[] = {
+            "\x1bP0;1;0q\"1;1;8;12#0;2;100;0;0#0!8~$#1!8N-!8?\x1b\\" "after",
+            "a\x1bPq~\x1b\\" "b\x1bP1;2|skipped\x1b\\" "c\x1bPq??\x1b" "[Ad",
+        };
+        std::mt19937 r2(7);
+        for (const std::string& s : pics) {
+            const std::string whole = run(s);
+            CHECK_EQ(run_bytewise(s), whole);
+            for (int trial = 0; trial < 300; trial++) CHECK_EQ(run_in_pieces(s, r2, 4), whole);
+        }
+    }
+
     // ---- split anywhere: the same events whole, a byte at a time, or in random pieces
     const std::string samples[] = {
         "hello \x1b[1;31mred\x1b[0m \xC3\xA9\xE4\xB8\xAD\xF0\x9F\x98\x80 \x1b]0;title\x07 \x1b(0lqk\x1b(B\x1b[?1049h\x1b[2J\x1b[H\x08\t\r\n",
         "\x1b[38:2::1:2:3m\x1b[48;5;200m\x1bP+q\x1b\\\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\",
+        "\x1bP0;1q#0;2;1;2;3~~!5?-\x1b\\\x1b[3AX\x1bPq~\x18" "y\x1bPq~\x1b\x1bPq??\x1b\\",
         "\xE2\x94\x80\xE2\x94\x80\x1b[12\x18" "ok\x1b[1?2H" "text\x1b\x1b\x1b[A",
     };
     std::mt19937 rng(42);

@@ -53,6 +53,48 @@ PicCell dimmed(const PicCell& p, double k) {
     return o;
 }
 
+// A copy of a placement with the pixels of every cell for which drop(row, col) is true made transparent; the cells are those of the picture
+// the placement is on, a cell being cw x ch pixels. A placement with no pixels in those cells is returned as it is (the raster is shared, not copied).
+template <class Drop>
+vtscreen::ImagePlacement masked(const vtscreen::ImagePlacement& p, int cw, int ch, Drop drop) {
+    if (!p.raster || cw <= 0 || ch <= 0) return p;
+    const vtscreen::Raster& src = *p.raster;
+    const int rows = (src.h + ch - 1) / ch, cols = (src.w + cw - 1) / cw;
+    std::shared_ptr<vtscreen::Raster> copy;
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++) {
+            if (!drop(p.row + r, p.col + c)) continue;
+            const int x0 = c * cw, x1 = std::min(src.w, x0 + cw), y0 = r * ch, y1 = std::min(src.h, y0 + ch);
+            bool ink = false;
+            for (int y = y0; y < y1 && !ink; y++)
+                for (int x = x0; x < x1 && !ink; x++) ink = src.at(x, y).a != 0;
+            if (!ink) continue;
+            if (!copy) copy = std::make_shared<vtscreen::Raster>(src);
+            for (int y = y0; y < y1; y++)
+                for (int x = x0; x < x1; x++) copy->at(x, y) = vtscreen::Pixel();
+        }
+    if (!copy) return p;
+    vtscreen::ImagePlacement o = p;
+    o.raster = copy;
+    return o;
+}
+
+// A copy of a placement with its colours scaled by k (0 to 1); one with a k of 0 or less is left out (an empty placement), and 1 is the placement itself.
+vtscreen::ImagePlacement darkened(const vtscreen::ImagePlacement& p, double k) {
+    if (!p.raster || k <= 0.0) return vtscreen::ImagePlacement();
+    if (k >= 1.0) return p;
+    auto copy = std::make_shared<vtscreen::Raster>(*p.raster);
+    for (vtscreen::Pixel& q : copy->px) {
+        if (q.a == 0) continue;
+        q.r = (uint8_t)std::floor(q.r * k + 0.5);
+        q.g = (uint8_t)std::floor(q.g * k + 0.5);
+        q.b = (uint8_t)std::floor(q.b * k + 0.5);
+    }
+    vtscreen::ImagePlacement o = p;
+    o.raster = copy;
+    return o;
+}
+
 // A picture that is the top left rows x cols of p.
 Picture crop(const Picture& p, int rows, int cols) {
     Picture o;
@@ -69,7 +111,7 @@ bool usable(const Picture& p) {
 
 }  // namespace
 
-void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style, Picture& out) {
+void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style, Picture& out, int cell_w, int cell_h) {
     if (!(pct > 0)) pct = 0;                       // also catches NaN
     if (pct > 1) pct = 1;
 
@@ -78,6 +120,8 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
     out.retained = false;
     out.rows = orows; out.cols = ocols;
     out.cell.assign((size_t)orows * ocols, PicCell());
+    out.clear_images();                            // (out is used again and again: what it carried before is not what it carries now)
+    out.fade_level = 0;
     out.touch_all();
     if (!usable(a) || !usable(b)) return;
 
@@ -91,6 +135,7 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
             const Picture& s = pct <= 0 ? a : b;
             for (int r = 0; r < body; r++)
                 for (int c = 0; c < cc; c++) out.cell[(size_t)r * ocols + c] = s.cell[(size_t)r * s.cols + c];
+            if (same_size) { out.images = s.images; out.fade_level = s.fade_level; }
         } else if (style == TransitionStyle::Crossfade || style == TransitionStyle::Slide) {
             if (same_size) {
                 vtscreen::fade(a, b, pct, out);
@@ -103,14 +148,26 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
                     for (int c = 0; c < cc; c++) out.cell[(size_t)r * ocols + c] = mixed.cell[(size_t)r * cc + c];
             }
         } else if (style == TransitionStyle::Dissolve) {
+            std::vector<unsigned char> from_b((size_t)body * cc, 0);               // for each cell: it has changed over to b's
             for (int r = 0; r < body; r++)
                 for (int c = 0; c < cc; c++) {
                     // the second half of a wide letter changes over with its first half (the same threshold), so a pair is not torn apart
                     const bool tail = c > 0 && ((a.cell[(size_t)r * a.cols + c].attrs & vtscreen::CELL_TAIL) ||
                                                 (b.cell[(size_t)r * b.cols + c].attrs & vtscreen::CELL_TAIL));
-                    const Picture& s = threshold(r, tail ? c - 1 : c) < pct ? b : a;
+                    const bool pick_b = threshold(r, tail ? c - 1 : c) < pct;
+                    from_b[(size_t)r * cc + c] = pick_b ? 1 : 0;
+                    const Picture& s = pick_b ? b : a;
                     out.cell[(size_t)r * ocols + c] = s.cell[(size_t)r * s.cols + c];
                 }
+            if (same_size) {                                                       // the pixels of a cell go with its letter
+                auto is_b = [&](int row, int col) { return row >= 0 && row < body && col >= 0 && col < cc && from_b[(size_t)row * cc + col] != 0; };
+                if (cell_w > 0 && cell_h > 0) {
+                    for (const vtscreen::ImagePlacement& p : a.images) out.images.push_back(masked(p, cell_w, cell_h, [&](int r, int c) { return is_b(r, c); }));
+                    for (const vtscreen::ImagePlacement& p : b.images) out.images.push_back(masked(p, cell_w, cell_h, [&](int r, int c) { return !is_b(r, c); }));
+                } else {
+                    out.images = pct < 0.5 ? a.images : b.images;                  // the size of a cell is not known: the nearer screen's pictures
+                }
+            }
         } else {                                   // Dip: a fades to dark by the half way point, then b fades up from dark
             const bool first = pct < 0.5;
             const Picture& s = first ? a : b;
@@ -118,6 +175,11 @@ void blend(const Picture& a, const Picture& b, double pct, TransitionStyle style
             for (int r = 0; r < body; r++)
                 for (int c = 0; c < cc; c++)
                     out.cell[(size_t)r * ocols + c] = dimmed(s.cell[(size_t)r * s.cols + c], k);
+            if (same_size)
+                for (const vtscreen::ImagePlacement& p : s.images) {
+                    vtscreen::ImagePlacement d = darkened(p, k);
+                    if (d.raster) out.images.push_back(std::move(d));
+                }
         }
     }
 
@@ -131,11 +193,15 @@ void compose(const std::vector<Layer>& layers, const Picture& bar, Picture& out,
     out.retained = false;
     out.rows = orows; out.cols = ocols;
     out.cell.assign((size_t)orows * ocols, fill);
+    out.clear_images();
+    out.fade_level = 0;
     out.touch_all();
     if (orows == 0 || ocols == 0) return;
     const int body = orows - 1;
     for (const Layer& l : layers) {
         if (l.pic == nullptr || !usable(*l.pic)) continue;
+        for (const vtscreen::ImagePlacement& p : l.pic->images)     // the pixels move with the layer (the screen cuts what is outside the body)
+            if (p.raster) out.place_image(p.raster, p.row + l.dy, p.col + l.dx, p.letter_rate);
         const int lrows = l.pic->rows - 1;                          // its body
         for (int r = 0; r < lrows; r++) {
             const int row = r + l.dy;
@@ -148,6 +214,13 @@ void compose(const std::vector<Layer>& layers, const Picture& bar, Picture& out,
     }
     if (usable(bar))
         for (int c = 0; c < ocols; c++) out.cell[(size_t)body * ocols + c] = bar.cell[(size_t)body * bar.cols + c];
+}
+
+std::vector<vtscreen::ImagePlacement> images_without(const Picture& pic, int row0, int col0, int rows, int cols, int cell_w, int cell_h) {
+    std::vector<vtscreen::ImagePlacement> out;
+    for (const vtscreen::ImagePlacement& p : pic.images)
+        out.push_back(masked(p, cell_w, cell_h, [&](int r, int c) { return r >= row0 && r < row0 + rows && c >= col0 && c < col0 + cols; }));
+    return out;
 }
 
 double ease_out(double t) {

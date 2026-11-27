@@ -16,12 +16,18 @@
 #include "app.h"
 #include "vtscreen/vtscreen.h"
 
+// vtpen's probe asks the real terminal what it can do (Sixel, the size of a cell). Without its headers vtmux works as it always did.
+#if !defined(VTMUX_NO_PROBE) && __has_include("vtpen_probe_posix.h")
+#include "vtpen_probe_posix.h"
+#define VTMUX_CAN_PROBE 1
+#endif
+
 using namespace vtmux;
 
 namespace {
 
 void usage() {
-    std::printf("vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--fps N] [-- command args ...]\n"
+    std::printf("vtmux [--transition slide|dip|dissolve|crossfade] [--transition-ms N] [--no-color] [--no-images] [--fps N] [-- command args ...]\n"
                 "  Ctrl-B     command mode: arrows switch consoles, a colon starts a command, Esc goes back\n"
                 "  commands   new [name] [-- command], close, next, prev, goto N, rename NAME, list, set transition|transition-ms|fps, quit, help\n");
 }
@@ -75,6 +81,7 @@ constexpr int MIN_COLS = 20, MIN_ROWS = 4;
 
 int run(int argc, char** argv, std::string& message) {
     AppOptions options;
+    bool no_images = false;
     vtscreen::Options screen;
     screen.fps = 60;                                       // the most frames a second (--fps changes it)
     for (int i = 1; i < argc; i++) {
@@ -82,6 +89,7 @@ int run(int argc, char** argv, std::string& message) {
         if (a == "--") { for (int k = i + 1; k < argc; k++) options.first_command.push_back(argv[k]); break; }
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else if (a == "--no-color") { screen.color = false; options.theme.color = false; }
+        else if (a == "--no-images") no_images = true;
         else if (a == "--fps" && i + 1 < argc) screen.fps = std::min(std::max(std::atoi(argv[++i]), 1), 240);
         else if ((a == "--fade-ms" || a == "--transition-ms") && i + 1 < argc) options.fade_ms = std::min(std::max(std::atoi(argv[++i]), 0), 5000);
         else if ((a == "--fade" || a == "--transition") && i + 1 < argc) {
@@ -92,6 +100,21 @@ int run(int argc, char** argv, std::string& message) {
     int cols = 80, rows = 24;
     if (!terminal_size(cols, rows)) { cols = 100; rows = 40; }             // (not a terminal: a plain default)
     if (cols < MIN_COLS || rows < MIN_ROWS) { message = "the terminal is too small"; return 1; }
+
+    // Ask the real terminal what it can do, before the screen is taken over (it takes a moment). The consoles are told the size of its
+    // cells; Sixel is passed on to them only when the terminal can draw it. --no-images and --no-color (no pictures without colour) skip it.
+    std::string typeahead;                                 // what was typed while the terminal was being asked: it goes to the first console
+#ifdef VTMUX_CAN_PROBE
+    if (!no_images && screen.color && !std::getenv("VTMUX_NO_IMAGES") && isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+        const vtpen::Capabilities cap = vtpen::probe_terminal(STDIN_FILENO, STDOUT_FILENO, 1000, false, &typeahead);
+        if (cap.cell_w > 0 && cap.cell_h > 0) {
+            options.outer.cell_w = cap.cell_w;
+            options.outer.cell_h = cap.cell_h;
+            options.outer.sixel = cap.usable();
+            if (cap.usable()) vtscreen::set_image_support(cap.cell_w, cap.cell_h);
+        }
+    }
+#endif
 
     vtscreen::Display display;
     display.open(screen, cols, rows);
@@ -107,6 +130,7 @@ int run(int argc, char** argv, std::string& message) {
         if (!app.start(error)) { message = "could not start: " + error; status = 1; }
         else {
             const auto begin = std::chrono::steady_clock::now();
+            if (!typeahead.empty()) app.handle_input(typeahead.data(), typeahead.size(), 0.0);      // typed before the first frame: not lost
             while (!display.stopping() && !app.done()) {
                 display.start();                           // the schedule is this frame's: a burst of keys must not push the next frames away
                 const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();

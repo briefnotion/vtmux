@@ -10,7 +10,10 @@
 // and 24-bit colours; the modes a host needs to know (application cursor keys, bracketed paste, the mouse and focus
 // reporting, cursor visibility); the title; and the replies (device status, cursor position, device attributes).
 //
-// Not done: a combining mark is dropped (a cell holds one character), the VT52 mode, sixel, double-width lines.
+// Sixel pictures are kept in a layer of their own beside the cells (see pictures.h): they scroll with the text, into the
+// scrollback (within a memory budget), and a letter written over a cell wipes that cell's piece of the picture.
+//
+// Not done: a combining mark is dropped (a cell holds one character), double-width lines.
 // A resize keeps the top left of the screen and does not reflow lines.
 #pragma once
 
@@ -20,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "pictures.h"
 #include "vtparser.h"
 
 namespace vtmux {
@@ -103,6 +107,34 @@ public:
     bool has_clipboard() const { return !clipboard_.empty(); }
     std::vector<std::string> take_clipboard() { std::vector<std::string> v; v.swap(clipboard_); return v; }
 
+    // What the real terminal this console runs in can do, so that what programs ask of the terminal is answered truly: the size
+    // of one of its character cells in pixels (0: not known) and whether it can draw Sixel pictures (that needs the cell size,
+    // so without it Sixel stays off). It is the host's to say, and survives a reset.
+    // A different cell size means the pictures no longer fit their cells: they are dropped.
+    void set_graphics(int cell_w, int cell_h, bool sixel);
+    int cell_pixel_width() const { return cell_w_; }
+    int cell_pixel_height() const { return cell_h_; }
+    bool sixel() const { return sixel_; }
+    // What the colour registers and the pictures may be (what a program is told when it asks).
+    static constexpr int SIXEL_COLOURS = 256, SIXEL_MAX_WIDTH = 4096, SIXEL_MAX_HEIGHT = 4096;
+
+    // ---- Sixel pictures (only while sixel() is on; otherwise a picture is discarded)
+    // Each cell of the shown screen may hold a piece of a picture (a Tile). A pane draws a cell's piece of its picture over the cell.
+    bool has_pictures() const { return pictures_.allocated(use_alt_ ? 1 : 0); }       // false: no cell has a piece (true: some might)
+    Tile picture_tile(int row, int col) const { return pictures_.tile(use_alt_ ? 1 : 0, row, col); }
+    // Lines of the scrollback have their pieces too: the line has none if this is empty, else one tile for every column.
+    const std::vector<Tile>& scrollback_tiles(size_t i) const { return pictures_.history(i); }
+    // The picture a tile belongs to (null if it was forgotten to make room).
+    std::shared_ptr<const vtscreen::Raster> picture(uint32_t id) const {
+        const Pictures::Image* im = pictures_.image(id);
+        return im ? im->raster : nullptr;
+    }
+    size_t picture_bytes() const { return pictures_.bytes(); }
+    size_t picture_count() const { return pictures_.image_count(); }
+    void set_picture_budget(size_t bytes) { pictures_.set_budget(bytes); }
+    bool sixel_display_mode() const { return sixel_display_mode_; }                   // mode 80 (DECSDM): pictures from the top left, no scrolling
+    bool sixel_cursor_right() const { return sixel_cursor_right_; }                   // mode 8452: the cursor ends right of a picture
+
     // Modes the host needs: how to send keys and mouse and focus, and whether to wrap a paste.
     bool application_cursor_keys() const { return app_cursor_keys_; }
     bool application_keypad() const { return app_keypad_; }
@@ -121,6 +153,12 @@ private:
     void csi(const Params& params, char marker, std::string_view intermediates, char final) override;
     void esc(std::string_view intermediates, char final) override;
     void osc(std::string_view text) override;
+    void dcs(const Params& params, char marker, std::string_view intermediates, char final, std::string_view data) override;
+
+    // ---- pictures: what is done to the cells is done to their pieces of pictures too
+    void clear_tiles(int row, int from, int to) { pictures_.clear(use_alt_ ? 1 : 0, row, from, to); }    // from <= col < to
+    void push_history(const Cell* line_begin, int screen, int row);     // a line leaves the top: into the scrollback, with its tiles
+    void place_picture(std::shared_ptr<const vtscreen::Raster> raster);
 
     // ---- the screen
     std::vector<Cell>& screen() { return use_alt_ ? alt_ : main_; }
@@ -158,6 +196,9 @@ private:
     void use_alt(bool on, bool clear);
     void device_status(const Params& p, char marker);
     void clear_screen_home();                  // the screen is cleared and the cursor goes home
+    std::string device_attributes() const;     // the answer to "what are you": a VT100 with the advanced video option, and Sixel if it can
+    void window_op(const Params& p);           // CSI Ps t: the questions about sizes (the requests to resize or move are ignored)
+    void graphics_attributes(const Params& p); // CSI ? Pi ; Pa ; Pv S: how many colours and how big a picture
     void resize_to(int rows, int cols);        // the grid is this size (what resize does, without changing the pane's width)
     void set_columns_mode(bool wide);          // DECCOLM: 132 (wide) or 80 columns, within the pane; the screen clears
     void soft_reset();
@@ -170,11 +211,15 @@ private:
     bool allow_deccolm_ = false;               // mode 40: the program allows the 80/132 column switch (as xterm needs); `reset` does not set it
     std::vector<Cell> main_, alt_;
     bool use_alt_ = false;
+    int cell_w_ = 0, cell_h_ = 0;              // the real terminal's cell in pixels (see set_graphics)
+    bool sixel_ = false;
     std::vector<uint8_t> dirty_;
     bool any_dirty_ = true;
 
-    std::deque<std::vector<Cell>> scrollback_;
+    std::deque<std::vector<Cell>> scrollback_;       // (pictures_ has a line of tiles for each of these)
     size_t scrollback_limit_ = 0;
+    Pictures pictures_;
+    bool sixel_display_mode_ = false, sixel_cursor_right_ = false;
 
     Cursor cursor_;
     bool wrap_pending_ = false;

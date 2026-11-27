@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <functional>
+#include <cstdlib>
 #include <string>
 #include <thread>
 
@@ -96,6 +97,48 @@ int main() {
         CHECK(s.rows() == 9 && s.cols() == 33);
         CHECK(wait_for([&] { return contains(s, "9 33"); }));
         CHECK(s.with_emulator([](Emulator& e) { return e.rows() == 9 && e.cols() == 33; }));
+    }
+
+    // ---- the pixel size: a program reads it from its terminal (the winsize), and the emulator answers for it too
+    if (std::system("python3 -c pass >/dev/null 2>&1") == 0) {
+        const char* show = "import fcntl,termios,struct,signal,time\n"
+                           "def show(*a):\n"
+                           "    r,c,x,y=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,b'\\0'*8)); print('SZ',r,c,x,y,'.',flush=True)\n"
+                           "signal.signal(signal.SIGWINCH,show); show()\n"
+                           "while True: time.sleep(0.05)\n";
+        {   // told before the program starts: it knows from its first moment, and a resize changes the pixels with the cells
+            Session s(6, 40, {"python3", "-u", "-c", show});
+            s.set_graphics(10, 20, true);
+            CHECK(s.start(error));
+            CHECK(wait_for([&] { return contains(s, "SZ 6 40 400 120 ."); }));
+            s.resize(9, 33);
+            CHECK(wait_for([&] { return contains(s, "SZ 9 33 330 180 ."); }));
+            CHECK(s.with_emulator([](Emulator& e) { return e.sixel() && e.cell_pixel_width() == 10 && e.cell_pixel_height() == 20; }));
+        }
+        {   // not known: zero, as before
+            Session s(6, 40, {"python3", "-u", "-c", show});
+            CHECK(s.start(error));
+            CHECK(wait_for([&] { return contains(s, "SZ 6 40 0 0 ."); }));
+            CHECK(s.with_emulator([](Emulator& e) { return !e.sixel() && e.cell_pixel_width() == 0; }));
+        }
+        {   // told later: the running program is told again (SIGWINCH), without Sixel when the terminal cannot
+            Session s(6, 40, {"python3", "-u", "-c", show});
+            CHECK(s.start(error));
+            CHECK(wait_for([&] { return contains(s, "SZ 6 40 0 0 ."); }));
+            s.set_graphics(8, 16, false);
+            CHECK(wait_for([&] { return contains(s, "SZ 6 40 320 96 ."); }));
+            CHECK(s.with_emulator([](Emulator& e) { return !e.sixel() && e.cell_pixel_width() == 8 && e.cell_pixel_height() == 16; }));
+        }
+        {   // a program asks the emulator: the answers are the real cell's
+            Session s(6, 40, {"sh", "-c", "stty raw -echo; printf '\\033[16t\\033[14t'; head -c 21 | od -An -c"});
+            s.set_graphics(9, 18, true);
+            CHECK(s.start(error));
+            CHECK(wait_for([&] { return s.exited(); }));
+            std::string text = all_text(s), squeezed;                           // (od's lines wrap at the width of the screen: take the spaces out)
+            for (char c : text) if (c != ' ' && c != '\n') squeezed += c;
+            CHECK(squeezed.find("033[6;18;9t") != std::string::npos);             // ESC [ 6 ; 18 ; 9 t: a cell is 18 tall and 9 wide
+            CHECK(squeezed.find("[4;108;360t") != std::string::npos);             // ESC [ 4 ; 108 ; 360 t: 6 rows of 18, 40 columns of 9
+        }
     }
 
     // ---- the program switches the screen to 80 columns (DECCOLM, allowed with mode 40): the emulator narrows and the program is told

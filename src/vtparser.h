@@ -42,6 +42,12 @@ public:
     virtual void csi(const Params& params, char marker, std::string_view intermediates, char final) = 0;
     virtual void esc(std::string_view intermediates, char final) = 0;     // ESC (B, ESC 7, ESC M, ESC # 8 ...
     virtual void osc(std::string_view text) = 0;                 // ESC ] text BEL (or ESC \), for example "0;a title"
+    // ESC P params final data ESC \ : a device control string with data. Only Sixel graphics (final 'q', no marker and no intermediate byte)
+    // is passed on, with the data after the q; every other device control string is skipped to its end, as it always was. Not called
+    // for a string that was cancelled (CAN, SUB, or an ESC that did not start ST) or that was longer than the limit.
+    virtual void dcs(const Params& params, char marker, std::string_view intermediates, char final, std::string_view data) {
+        (void)params; (void)marker; (void)intermediates; (void)final; (void)data;
+    }
 };
 
 class VtParser {
@@ -57,12 +63,16 @@ public:
     // How long a string (OSC) may be before the rest is dropped.
     static constexpr size_t MAX_STRING = 4096;
     static constexpr size_t MAX_CLIPBOARD_STRING = 1 << 20;     // the limit for an OSC 52 (clipboard) string: 1 MiB
+    static constexpr size_t MAX_SIXEL_STRING = 32u << 20;       // the limit for the data of a Sixel picture: 32 MiB (the rest is dropped, and so is the picture)
+    // The limit for the data of a device control string (Sixel); a different one is for tests.
+    void set_max_dcs_string(size_t bytes) { max_dcs_string_ = bytes; }
     static constexpr size_t MAX_PARAMS = 32;
 
 private:
     enum class State {
         Ground, Escape, EscapeIntermediate, CsiEntry, CsiParam, CsiIntermediate, CsiIgnore,
-        OscString, StringIgnore,         // OSC, and DCS / SOS / PM / APC strings which are skipped to their end
+        DcsEntry, DcsParam, DcsIntermediate, DcsString,      // ESC P: its parameters, then (for Sixel) its data
+        OscString, StringIgnore,         // OSC, and the DCS / SOS / PM / APC strings which are skipped to their end
     };
 
     void byte(uint8_t b, VtParserEvents& ev);
@@ -71,6 +81,8 @@ private:
     void param_byte(uint8_t b);
     void dispatch_csi(char final, VtParserEvents& ev);
     void finish_string(VtParserEvents& ev);
+    void finish_params();                  // the parameter in progress goes on the list
+    void dcs_final(uint8_t b);             // the final byte of ESC P ... : Sixel goes on to collect its data, every other string is skipped
 
     State state_ = State::Ground;
     bool vt52_ = false;
@@ -87,6 +99,7 @@ private:
     std::string intermediates_;
     std::string string_;
     bool string_too_long_ = false;
+    size_t max_dcs_string_ = MAX_SIXEL_STRING;
     bool esc_in_string_ = false;        // an ESC inside a string: it ends it if a \ follows
 };
 

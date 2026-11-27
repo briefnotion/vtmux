@@ -63,6 +63,20 @@ Session::~Session() {
     hang_up();
 }
 
+void Session::set_graphics(int cell_w, int cell_h, bool sixel) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cell_w_ = cell_w > 0 && cell_h > 0 ? cell_w : 0;
+    cell_h_ = cell_w_ > 0 ? cell_h : 0;
+    emulator_.set_graphics(cell_w, cell_h, sixel);
+    if (master_ >= 0) tell_size();                  // a program that is already running learns the pixel size too
+}
+
+// The size of the terminal in pixels for the winsize a program reads: its cells times the real terminal's cell (0 when that is not known).
+static unsigned short pixels(int cells, int cell) {
+    const long long v = (long long)cells * cell;
+    return (unsigned short)std::min<long long>(v, 65535);
+}
+
 bool Session::start(std::string& error) {
     if (pipe(wake_) != 0) { error = std::string("pipe: ") + std::strerror(errno); return false; }
     set_cloexec(wake_[0]);
@@ -71,6 +85,8 @@ bool Session::start(std::string& error) {
     winsize ws{};
     ws.ws_row = (unsigned short)rows_;
     ws.ws_col = (unsigned short)cols_;
+    ws.ws_xpixel = pixels(cols_, cell_w_);
+    ws.ws_ypixel = pixels(rows_, cell_h_);
     pid_ = forkpty(&master_, nullptr, nullptr, &ws);
     if (pid_ < 0) { error = std::string("forkpty: ") + std::strerror(errno); return false; }
 
@@ -187,6 +203,8 @@ void Session::tell_size() {
         winsize ws{};
         ws.ws_row = (unsigned short)told_rows_;
         ws.ws_col = (unsigned short)told_cols_;
+        ws.ws_xpixel = pixels(told_cols_, cell_w_);
+        ws.ws_ypixel = pixels(told_rows_, cell_h_);
         ::ioctl(master_, TIOCSWINSZ, &ws);
     }
 }

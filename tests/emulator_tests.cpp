@@ -662,6 +662,88 @@ int main() {
         CHECK_EQ(e.take_reply(), std::string("\x1b[?13n"));
     }
 
+    // ---- what a program is told about the real terminal: sizes, and Sixel when the terminal can draw it
+    {
+        Emulator e(5, 20);
+        // nothing known: the sizes in cells are answered, the pixel ones are not (a guess would be false), no Sixel
+        e.feed("\x1b[18t");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[8;5;20t"));
+        e.feed("\x1b[14t\x1b[16t");
+        CHECK_EQ(e.take_reply(), std::string(""));
+        e.feed("\x1b[c");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2c"));
+        e.feed("\x1b[?1;1;0S\x1b[?2;1;0S");
+        CHECK_EQ(e.take_reply(), std::string(""));                              // no Sixel: not a word about colours or sizes of pictures
+        CHECK(!e.sixel() && e.cell_pixel_width() == 0);
+
+        // the cell is known but the terminal cannot draw Sixel: the sizes are answered, Sixel is not offered
+        e.set_graphics(10, 20, false);
+        e.feed("\x1b[14t");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[4;100;200t"));                // 5 rows of 20, 20 columns of 10
+        e.feed("\x1b[16t");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[6;20;10t"));                  // height first, then width
+        e.feed("\x1b[c");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2c"));
+        CHECK(!e.sixel());
+
+        // and it can: feature 4 in the device attributes (and DECID), and the colour and picture questions are answered
+        e.set_graphics(10, 20, true);
+        CHECK(e.sixel() && e.cell_pixel_width() == 10 && e.cell_pixel_height() == 20);
+        e.feed("\x1b[c");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2;4c"));
+        e.feed("\x1b[0c");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2;4c"));
+        e.feed("\x1b[1c");                                                      // a different question: not answered as this one
+        CHECK_EQ(e.take_reply(), std::string(""));
+        e.feed("\x1bZ");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2;4c"));
+        e.feed("\x1b[?1;1;0S");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;0;256S"));
+        e.feed("\x1b[?2;1;0S");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?2;0;4096;4096S"));
+        e.feed("\x1b[?1;4S\x1b[?2;4S\x1b[?1;2S");                              // the biggest, and a reset: the one setting each
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;0;256S\x1b[?2;0;4096;4096S\x1b[?1;0;256S"));
+        e.feed("\x1b[?1;3;512S");                                               // setting it: refused
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;3S"));
+        e.feed("\x1b[?3;1;0S");                                                 // ReGIS: not ours
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?3;1S"));
+        e.feed("\x1b[?1;9S");                                                   // not an action
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2S"));
+
+        // the pixel size follows the size of the screen
+        e.resize(8, 30);
+        e.feed("\x1b[14t\x1b[18t");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[4;160;300t\x1b[8;8;30t"));
+
+        // what we are called
+        e.feed("\x1b[>0q");
+        CHECK_EQ(e.take_reply(), std::string("\x1bP>|vtmux\x1b\\"));
+        e.feed("\x1b[>q");
+        CHECK_EQ(e.take_reply(), std::string("\x1bP>|vtmux\x1b\\"));
+        e.feed("\x1b[>1q");
+        CHECK_EQ(e.take_reply(), std::string(""));
+
+        // a reset does not change what the real terminal is
+        e.feed("\x1b" "c");
+        e.feed("\x1b[?1;1;0S");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;0;256S"));
+
+        // the requests to change the real window are not carried out and get no answer; other questions are left alone too
+        e.feed("\x1b[8;50;100t\x1b[4;800;600t\x1b[1t\x1b[21t\x1b[t\x1b[0t");
+        CHECK_EQ(e.take_reply(), std::string(""));
+        CHECK(e.rows() == 8 && e.cols() == 30);
+
+        // Sixel needs a cell size: asked for without one it stays off; nonsense sizes count as not known
+        e.set_graphics(0, 0, true);
+        CHECK(!e.sixel() && e.cell_pixel_width() == 0);
+        e.set_graphics(10, 0, true);
+        CHECK(!e.sixel() && e.cell_pixel_width() == 0 && e.cell_pixel_height() == 0);
+        e.set_graphics(-5, 20, true);
+        CHECK(!e.sixel());
+        e.feed("\x1b[c\x1b[14t");
+        CHECK_EQ(e.take_reply(), std::string("\x1b[?1;2c"));
+    }
+
     // ---- dirty rows
     {
         Emulator e(4, 6);

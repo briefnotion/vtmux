@@ -37,19 +37,34 @@ void VtParser::param_byte(uint8_t b) {
     }
 }
 
-void VtParser::dispatch_csi(char final, VtParserEvents& ev) {
-    // the last parameter, if there was anything at all (an empty list stays empty)
+// the last parameter, if there was anything at all (an empty list stays empty)
+void VtParser::finish_params() {
     if (have_digit_ || !params_.value.empty() || next_is_sub_) {
         if (params_.value.size() < MAX_PARAMS) {
             params_.value.push_back(have_digit_ ? current_ : -1);
             params_.sub.push_back(next_is_sub_ ? 1 : 0);
         }
     }
+}
+
+void VtParser::dispatch_csi(char final, VtParserEvents& ev) {
+    finish_params();
     ev.csi(params_, marker_, intermediates_, final);
+}
+
+void VtParser::dcs_final(uint8_t b) {
+    if (b == 'q' && marker_ == 0 && intermediates_.empty()) {
+        finish_params();
+        state_ = State::DcsString;                               // Sixel: its data is collected
+    } else {
+        state_ = State::StringIgnore;                            // any other device control string: skipped to its end
+    }
 }
 
 void VtParser::finish_string(VtParserEvents& ev) {
     if (state_ == State::OscString && !string_too_long_) ev.osc(string_);
+    if (state_ == State::DcsString && !string_too_long_) ev.dcs(params_, marker_, intermediates_, 'q', string_);
+    if (string_.capacity() > (1u << 20)) std::string().swap(string_);        // (a big picture's data does not stay allocated)
     string_.clear();
     string_too_long_ = false;
     esc_in_string_ = false;
@@ -79,7 +94,7 @@ void VtParser::ground(uint8_t b, VtParserEvents& ev) {
 
 void VtParser::byte(uint8_t b, VtParserEvents& ev) {
     // Strings first: their own rules for BEL and ESC.
-    if (state_ == State::OscString || state_ == State::StringIgnore) {
+    if (state_ == State::OscString || state_ == State::StringIgnore || state_ == State::DcsString) {
         if (esc_in_string_) {
             esc_in_string_ = false;
             if (b == '\\') { finish_string(ev); return; }        // ESC \ : the end
@@ -93,6 +108,10 @@ void VtParser::byte(uint8_t b, VtParserEvents& ev) {
         if (b == 0x1B) { esc_in_string_ = true; return; }
         if (b == 0x07 && state_ == State::OscString) { finish_string(ev); return; }     // BEL ends an OSC
         if (b == 0x18 || b == 0x1A) { string_.clear(); string_too_long_ = false; state_ = State::Ground; return; }   // CAN, SUB
+        if (state_ == State::DcsString) {
+            if (string_.size() < max_dcs_string_) string_ += (char)b; else string_too_long_ = true;
+            return;
+        }
         if (state_ == State::OscString) {
             // a clipboard write (OSC 52) may be a whole page of text; any other string is kept short
             const size_t limit = (string_.size() >= 3 && string_.compare(0, 3, "52;") == 0) ? MAX_CLIPBOARD_STRING : MAX_STRING;
@@ -133,7 +152,8 @@ void VtParser::byte(uint8_t b, VtParserEvents& ev) {
             }
             if (b == '[') { clear_sequence(); state_ = State::CsiEntry; }
             else if (b == ']') { string_.clear(); string_too_long_ = false; state_ = State::OscString; }
-            else if (b == 'P' || b == 'X' || b == '^' || b == '_') { string_.clear(); state_ = State::StringIgnore; }   // DCS, SOS, PM, APC
+            else if (b == 'P') { string_.clear(); string_too_long_ = false; state_ = State::DcsEntry; }   // DCS: Sixel is collected
+            else if (b == 'X' || b == '^' || b == '_') { string_.clear(); state_ = State::StringIgnore; }              // SOS, PM, APC
             else if (b >= 0x20 && b <= 0x2F) { intermediates_ += (char)b; state_ = State::EscapeIntermediate; }
             else if (b >= 0x30 && b <= 0x7E) { ev.esc(intermediates_, (char)b); state_ = State::Ground; }
             return;
@@ -167,8 +187,29 @@ void VtParser::byte(uint8_t b, VtParserEvents& ev) {
             if (b >= 0x40 && b <= 0x7E) state_ = State::Ground;                   // skipped to its end
             return;
 
+        case State::DcsEntry:
+            if (b >= 0x3C && b <= 0x3F) { marker_ = (char)b; state_ = State::DcsParam; }
+            else if ((b >= '0' && b <= '9') || b == ';' || b == ':') { param_byte(b); state_ = State::DcsParam; }
+            else if (b >= 0x20 && b <= 0x2F) { intermediates_ += (char)b; state_ = State::DcsIntermediate; }
+            else if (b >= 0x40 && b <= 0x7E) dcs_final(b);
+            return;
+
+        case State::DcsParam:
+            if ((b >= '0' && b <= '9') || b == ';' || b == ':') param_byte(b);
+            else if (b >= 0x3C && b <= 0x3F) state_ = State::StringIgnore;          // a marker in the middle: not one we know
+            else if (b >= 0x20 && b <= 0x2F) { intermediates_ += (char)b; state_ = State::DcsIntermediate; }
+            else if (b >= 0x40 && b <= 0x7E) dcs_final(b);
+            return;
+
+        case State::DcsIntermediate:
+            if (b >= 0x20 && b <= 0x2F) { if (intermediates_.size() < 4) intermediates_ += (char)b; }
+            else if (b >= 0x30 && b <= 0x3F) state_ = State::StringIgnore;
+            else if (b >= 0x40 && b <= 0x7E) dcs_final(b);
+            return;
+
         case State::OscString:
         case State::StringIgnore:
+        case State::DcsString:
             return;                                                               // handled above
     }
 }
